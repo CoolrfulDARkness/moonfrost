@@ -21,7 +21,7 @@ MoonFROST 面向强敌手环境设计，覆盖以下威胁：
 
 - **存在性不可伪造性（EUF-CMA）**：遵循 Komlo-Goldberg (SAC 2020) 与 Bellare-Crites-Komlo-Malluhi-Tessaro-Zhu (CRYPTO 2022) 对 FROST 的安全性证明，在离散对数困难假设与随机预言机模型下，即使并发开启多会话，任意控制少于 $t$ 个节点的 PPT 敌手也无法伪造合法的群 Schnorr 签名。
 - **签名不可区分性（Output Indistinguishability）**：输出的 $(R, z)$ 严格符合 RFC 9591 Appendix A/B 标准素数阶 Schnorr 签名格式，验证方使用标准单方 `prime_order_verify` 即可验签，无法从签名本身区分门限规模 $(t, n)$ 或参与签名的具体子集。
-- **可识别中止（Identifiable Abort, RFC 9591 §5.4）**：当聚合验签失败时，Coordinator 通过公开的 `PublicKeyPackage` 逐片验证所有参与者的签名分片，100% 精准归因全部作弊者 ID（`FrostError::CheaterDetected(Array[Int])`），支持上层自动剔除恶意节点并自愈重签。
+- **可识别中止（Identifiable Abort, RFC 9591 §5.4）**：当聚合验签失败时，Coordinator 通过公开的 `PublicKeyPackage` 逐片验证所有参与者的签名分片，100% 精准归因全部作弊者 ID（`FrostError::CheaterDetected(Array[Int32])`），支持上层自动剔除恶意节点并自愈重签。
 - **零 FFI 内存安全边界**：全项目由纯 MoonBit 编写并通过 CI 静态门禁强制校验零 `extern` 声明，在 Wasm、JS、Native 三端均享受强类型与数组越界保护。
 
 ---
@@ -36,8 +36,10 @@ MoonFROST 面向强敌手环境设计，覆盖以下威胁：
 | `ristretto255/ristretto.mbt` | 群元素编码/比较 | `encode` 使用 `Fe::ct_select` 与 `ct_abs`；`ct_eq` 双陪集恒定时间判定；`EdwardsPoint` 私有封装 | 无辅因子暴露，非单位元校验完备 |
 | `ristretto255/scalar.mbt` | $sk_i, d_i, e_i, z_i$ | 4×64-bit 无分支 `sub_borrow_u64` 与 Montgomery 乘；费马小定理 $s^{\ell-2} \bmod \ell$ 固定 253 位扫描求逆 | 零 EGCD 分支，严格规范解码（`< l`） |
 | `p256/field.mbt` | 域元素、坐标投影 | `4×64-bit` Montgomery 域无分支 `adc`/`sbb`/`mul64`、`FieldElement::ct_select`、费马求逆 $a^{p-2} \bmod p$ | 无 secret 分支 |
-| `p256/point.mbt` | $sk_i, d_i, e_i$ 标量乘 | Renes-Costello-Batina 2015 $a=-3$ 完备加法 (Alg. 4) 与倍点 (Alg. 6)；4-bit 固定窗口 + 16 项全表 CT 扫描 `ct_table_lookup` | 零点加例外分支，零 secret 查表索引 |
+| `p256/point.mbt` | $sk_i, d_i, e_i$ 标量乘 | Renes-Costello-Batina 2015 $a=-3$ 完备加法 (Alg. 4) 与倍点 (Alg. 6)；4-bit 固定窗口 + 16 项全表 CT 扫描 `ct_table_lookup` + 寄存器级 `to_canonical_limbs` 零堆分配 | 零点加例外分支，零 secret 查表索引，零秘密 `Bytes` 堆分配 |
 | `p256/scalar.mbt` | $sk_i, d_i, e_i, z_i$ | `4×64-bit` Montgomery 标量算术；费马小定理 $s^{n-2} \bmod n$ 固定 256 位扫描求逆；48B Horner 归约 | 零 EGCD 分支，严格规范解码（`< n`） |
+| `crypto/drbg.mbt` | CSPRNG 状态与密钥流 | DJB Fast-Key-Erasure 每次请求后自动密钥棘轮、逐字节擦除已消费缓冲区、`Drbg::zeroize()` | 前向安全（防内存转储回溯历史 Nonce） |
+| `frost/dkg.mbt` | DKG 秘密多项式与 Round 1 转录 | `DkgRound1Secret` 在 `dkg_part2` 成功后立即清零多项式；`DkgRound2Secret` 绑定 `verified_r1` 快照防 Split-View 替换 | 防 Round 1/3 Split-View 恶意密钥注入与二次消费 |
 | `frost/nonce.mbt` | Round 1 签名 Nonce | `SigningNonces` 全字段 `priv`；`consume()` 强制覆写 `scalar_zero()` 并置位 `used = true` | 严禁二次签名复用，Hedged Nonce 纵深防御 |
 
 > **客观安全边界说明（Managed Runtime Transparency）**：
@@ -116,8 +118,8 @@ MoonFROST 在单元测试与独立验证包 `tests/` 中建立了多层次验证
    - **Nonce 一次性防重用**：二次调用 `sign` 必返回 `Err(FrostError::NonceAlreadyUsed)` 且 `is_used() == true`。
    - **承诺列表篡改与恶意协调者**：未排序列表（`UnsortedCommitments`）、重复 ID（`DuplicateParticipant`）、零/负/越界 ID（`InvalidParticipantId`）、人数不足阈值（`InsufficientParticipants`）、单位元承诺（`IdentityElement`）、偷换签名者自身承诺（`CommitmentMismatch`）。
    - **Identifiable Abort (§5.4)**：单作弊者、多作弊者同时投毒、错误消息/错误公钥聚合，均精准定位全部作弊者 ID。
-   - **Pedersen DKG 对抗**：Round 1 伪造 Schnorr PoK 或单位元 `pok_r`（`InvalidDkgProof`）、Round 2 单/多发送者投递错误分片（`CheaterDetected`）、重复或越界包拒绝、任意 $t$ 节点子集门限签名一致性验证。
-   - **规范编码与延展性防御**：非规范标量（`>= l` / `>= n`）、非法前缀或非曲线点、签名截断/加长（`InvalidSignatureLength`）、单位元 $R$ 签名（`IdentityElement`）、跨消息/跨公钥验签拒绝。
+   - **Pedersen DKG 对抗**：Round 1 伪造 Schnorr PoK、单位元 `C_0`/`C_k` 或错误承诺长度（`InvalidDkgProof` 精准定责）、Round 1/3 Split-View 替换攻击（`InvalidVssCommitment`）、Round 2 单/多发送者投递错误分片（`CheaterDetected`）、重复/缺/多/越界包拒绝、任意 $t$ 节点子集门限签名一致性验证。
+   - **规范编码与延展性防御**：非规范标量（`InvalidScalar`）、非法前缀或非曲线点/单位元线编码（`InvalidElement`）、签名截断/加长（`InvalidSignatureLength`）、内存结构单位元 $R$ 序列化（`IdentityElement`）、跨消息/跨公钥验签拒绝。
 
 ### 5.2 三端全量测试汇总
 
@@ -126,9 +128,9 @@ MoonFROST 在单元测试与独立验证包 `tests/` 中建立了多层次验证
 | 验证维度 | `wasm` (`-d`) | `js` (`-d`) | `native` (`-d`) | 说明 |
 | :--- | :---: | :---: | :---: | :--- |
 | `moon check --no-mbti -d` | **0 warnings** | **0 warnings** | **0 warnings** | 全仓库 7 个包严格零警告 |
-| `moon test -d` | **58 / 58 PASS** | **58 / 58 PASS** | **58 / 58 PASS** | 含 `crypto`(7) + `ristretto255`(9) + `p256`(6) + `frost`(7) + 根门面(1) + `tests`(28) |
+| `moon test -d` | **68 / 68 PASS** | **68 / 68 PASS** | **68 / 68 PASS** | 含 `crypto`(8) + `ristretto255`(9) + `p256`(6) + `frost`(7) + 根门面与 README doctest(2) + `tests`(36) |
 | RFC 9591 Appendix E.3 & E.4 | **100% 字节吻合** | **100% 字节吻合** | **100% 字节吻合** | 双套件 Round 1 / Round 2 / 最终 64B & 65B 签名逐字节匹配 |
-| 安全对抗测试 (`tests/security_adversarial_test.mbt`) | **26 / 26 PASS** | **26 / 26 PASS** | **26 / 26 PASS** | 覆盖作弊定责、Nonce 重用、非规范编码、DKG 投毒与重放攻击 |
+| 安全对抗测试 (`tests/security_adversarial_test.mbt`) | **34 / 34 PASS** | **34 / 34 PASS** | **34 / 34 PASS** | 覆盖 DKG Split-View 防御、VSS 防降级、作弊定责、Nonce 重用、非规范编码、越界 ID 与重放攻击 |
 | `moon run cmd/main` 冒烟 | **PASS (exit 0)** | **PASS (exit 0)** | **PASS (exit 0)** | 3-of-5 钱包 + 根 CA + 恶意节点抓捕 + E.3/E.4 现场核验三端输出完全一致 |
 
 ### 5.3 三端性能基准实测 (`wasm` / `js` / `native`)

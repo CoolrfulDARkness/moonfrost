@@ -39,6 +39,10 @@ flowchart TD
     R --> M
     P --> M
     M --> CLI
+    F --> CLI
+    C --> CLI
+    R --> CLI
+    P --> CLI
     M --> T
     F --> T
 ```
@@ -292,8 +296,8 @@ moonbit-frost/
   - 辅助方法：`CommitmentEntry::new`, `PublicKeyPackage::verifying_share_for`, `SigningNonces::commitments`, `SigningNonces::is_used`
 - **`CoolrfulDARkness/moonfrost/crypto`**：
   - CT 与清零：`ct_mask_from_bit`, `ct_is_zero_u64`, `ct_eq_u64`, `ct_select_u64`, `ct_select_u32`, `ct_select_byte`, `ct_eq_bytes`, `ct_eq_fixed_bytes`, `zeroize_bytes`, `zeroize_u64`
-  - 哈希与扩展：`Sha256::{new, update, finalize}`, `sha256`, `sha256_concat`, `Sha512::{new, update, finalize}`, `sha512`, `sha512_concat`, `expand_message_xmd_sha256`
-  - 伪随机与编码：`Drbg::{from_seed, next_bytes, reseed}`, `bytes_to_hex`, `hex_to_bytes`, `ascii_bytes`, `concat_bytes`
+  - 哈希与扩展：`Sha256::{new, update, finalize, zeroize}`, `sha256`, `sha256_concat`, `Sha512::{new, update, finalize, zeroize}`, `sha512`, `sha512_concat`, `expand_message_xmd_sha256`
+  - 伪随机与编码：`Drbg::{from_seed, next_bytes, reseed, zeroize}`（内置 DJB Fast-Key-Erasure 密钥棘轮与前向安全）, `bytes_to_hex`, `hex_to_bytes`, `ascii_bytes`, `concat_bytes`
 - **`CoolrfulDARkness/moonfrost/ristretto255`**：
   - 常量与哈希：`CONTEXT_STRING`, `NE = 32`, `NS = 32`, `h1`, `h2`, `h3`, `h4`, `h5`, `h_dkg`
   - `RistrettoPoint`：`identity`, `generator`, `add`, `sub`, `neg`, `ct_eq`, `is_identity`, `scalar_mul`, `scalar_base_mul`, `encode`, `decode`, `serialize_non_identity`, `deserialize_non_identity`, `from_uniform_bytes`

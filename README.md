@@ -49,9 +49,9 @@ moon bench --target native --release
 
 以下示例严格对应顶层门面 [`moonfrost.mbt`](moonfrost.mbt) 的真实公开 API（将 `ristretto255_sha512()` 替换为 `p256_sha256()` 即可无缝切换至 NIST P-256 套件）：
 
-```moonbit nocheck
+```mbt check
 ///|
-fn demo_3of5_dkg_and_cheater_detection() -> Unit {
+test "3-of-5 Pedersen DKG + 2-Round FROST signing + cheater detection" {
   let ops = @moonfrost.ristretto255_sha512()
   let drbg = @moonfrost.drbg_from_seed(b"moonfrost-3of5-demo-seed")
   let max_signers = 5
@@ -129,19 +129,18 @@ fn demo_3of5_dkg_and_cheater_detection() -> Unit {
     decoded,
     pub_pkg.verifying_key,
   ).unwrap()
-  println("Threshold signature valid: \{ok} (\{sig_bytes.length()} bytes)")
+  assert_eq(ok, true)
+  assert_eq(sig_bytes.length(), 64)
 
   // 3) RFC 9591 §5.4 Identifiable Abort：模拟 Node 3 注入恶意分片并精准抓捕
   let bad_s3 : @moonfrost.SignatureShare[_] = {
     identifier: 3,
     share: (ops.scalar_add)(s3.share, (ops.scalar_one)()),
   }
-  match
-    @moonfrost.aggregate(ops, commitment_list, msg, pub_pkg, [s1, bad_s3, s5]) {
-    Err(@moonfrost.FrostError::CheaterDetected(ids)) =>
-      println("Caught malicious signer(s): \{ids}") // 输出: [3]
-    _ => ()
-  }
+  assert_true(
+    @moonfrost.aggregate(ops, commitment_list, msg, pub_pkg, [s1, bad_s3, s5])
+    is Err(@moonfrost.FrostError::CheaterDetected([3])),
+  )
 }
 ```
 
@@ -149,7 +148,7 @@ fn demo_3of5_dkg_and_cheater_detection() -> Unit {
 
 ## 性能基准与三端验证
 
-实测环境：`moon 0.1.20261119` / `moonc v0.10.22+124d61d05`（Windows x86_64），全仓库 **58 / 58 测试**（含 RFC 9591 Appendix E.3/E.4 全量向量 + **26 项安全对抗测试**）在 `wasm` / `js` / `native` 三端 `-d` 零警告通过，零 `extern` FFI。
+实测环境：`moon 0.1.20261119` / `moonc v0.10.22+124d61d05`（Windows x86_64），全仓库 **68 / 68 测试**（含 RFC 9591 Appendix E.3/E.4 全量向量 + **34 项安全对抗测试** + 本页 `README.mbt.md` 真实 `mbt check` doctest）在 `wasm` / `js` / `native` 三端 `-d` 零警告通过，零 `extern` FFI。
 
 三端 `--release` `moon bench` 实测数据（`10 / 10 passed`）：
 
