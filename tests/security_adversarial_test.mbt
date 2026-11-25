@@ -1094,7 +1094,8 @@ fn[S, E] check_signature_replay_bitflip_and_length(
 
   let flipped_r_bytes = adv_flip_byte(sig_bytes, 1, b'\x01')
   match @moonfrost.deserialize_signature(ops, flipped_r_bytes) {
-    Err(_) => ()
+    Err(@frost.FrostError::InvalidElement(_)) => ()
+    Err(e) => fail("\{tag}: expected InvalidElement on R bit-flip, got \{e}")
     Ok(s) =>
       assert_eq(
         @moonfrost.prime_order_verify(ops, msg1, s, pub1.verifying_key),
@@ -1103,7 +1104,8 @@ fn[S, E] check_signature_replay_bitflip_and_length(
   }
   let flipped_z_bytes = adv_flip_byte(sig_bytes, expected_sig_len - 1, b'\x01')
   match @moonfrost.deserialize_signature(ops, flipped_z_bytes) {
-    Err(_) => ()
+    Err(@frost.FrostError::InvalidScalar(_)) => ()
+    Err(e) => fail("\{tag}: expected InvalidScalar on z bit-flip, got \{e}")
     Ok(s) =>
       assert_eq(
         @moonfrost.prime_order_verify(ops, msg1, s, pub1.verifying_key),
@@ -1208,5 +1210,629 @@ test "adversarial_26_participant_set_mismatch_and_invalid_thresholds" {
   check_set_mismatch_and_invalid_thresholds(
     @moonfrost.p256_sha256(),
     "adv26-p256",
+  )
+}
+
+///|
+fn[S, E] check_dkg_part3_split_view_r1_substitution(
+  ops : @frost.SuiteOps[S, E],
+  tag : String,
+) -> Unit raise {
+  // Red-team regression for CRITICAL #1:
+  // Malicious peer 3 runs honest Round 1 & Round 2, then between dkg_part2 and
+  // dkg_part3 substitutes its Round 1 package with a forged Rogue-Key commitment
+  // C'_3 = [TargetPK - C_1,0 - C_2,0, -(1^-1)*C'_3,0] and sends zero share to P1.
+  let drbg = @moonfrost.drbg_from_seed(@crypto.ascii_bytes("\{tag}-dkg"))
+  let r1_secrets : Array[@frost.DkgRound1Secret[S]] = []
+  let r1_pkgs : Array[@frost.DkgRound1Package[S, E]] = []
+  for id = 1; id <= 3; id = id + 1 {
+    let (sec, pkg) = match @moonfrost.dkg_part1(ops, id, 3, 2, drbg) {
+      Ok(v) => v
+      Err(e) => fail("\{tag}: dkg_part1 failed: \{e}")
+    }
+    r1_secrets.push(sec)
+    r1_pkgs.push(pkg)
+  }
+  let (p1_r2_sec, _) = match @moonfrost.dkg_part2(ops, r1_secrets[0], r1_pkgs) {
+    Ok(v) => v
+    Err(e) => fail("\{tag}: dkg_part2 P1 failed: \{e}")
+  }
+  // Also verify DkgRound1Secret cannot be reused after successful dkg_part2.
+  assert_true(
+    @moonfrost.dkg_part2(ops, r1_secrets[0], r1_pkgs)
+    is Err(@frost.FrostError::InvalidParameters(_)),
+  )
+  let (_, p2_r2_pkgs) = match
+    @moonfrost.dkg_part2(ops, r1_secrets[1], r1_pkgs) {
+    Ok(v) => v
+    Err(e) => fail("\{tag}: dkg_part2 P2 failed: \{e}")
+  }
+  let mut p2_to_p1_opt : @frost.DkgRound2Package[S]? = None
+  for i = 0; i < p2_r2_pkgs.length(); i = i + 1 {
+    if p2_r2_pkgs[i].receiver == 1 {
+      p2_to_p1_opt = Some(p2_r2_pkgs[i])
+      break
+    }
+  }
+  let p2_to_p1 = match p2_to_p1_opt {
+    Some(v) => v
+    None => fail("\{tag}: missing P2->P1 share")
+  }
+  let target_pk = (ops.scalar_base_mul)((ops.scalar_from_u32)(777U))
+  let c3_0 = (ops.element_sub)(
+    (ops.element_sub)(target_pk, r1_pkgs[0].commitment.coeffs[0]),
+    r1_pkgs[1].commitment.coeffs[0],
+  )
+  let c3_1 = (ops.element_neg)(c3_0)
+  let forged_r1_p3 : @frost.DkgRound1Package[S, E] = {
+    identifier: 3,
+    commitment: { coeffs: [c3_0, c3_1], },
+    pok_r: (ops.element_identity)(),
+    pok_mu: (ops.scalar_zero)(),
+  }
+  let substituted_r1 : Array[@frost.DkgRound1Package[S, E]] = [
+    r1_pkgs[0],
+    r1_pkgs[1],
+    forged_r1_p3,
+  ]
+  let forged_r2_for_p1 : Array[@frost.DkgRound2Package[S]] = [
+    p2_to_p1,
+    { sender: 3, receiver: 1, secret_share: (ops.scalar_zero)(), },
+  ]
+  assert_true(
+    @moonfrost.dkg_part3(ops, p1_r2_sec, substituted_r1, forged_r2_for_p1)
+    is Err(@frost.FrostError::InvalidVssCommitment(_)),
+  )
+}
+
+///|
+test "adversarial_27_dkg_part3_split_view_r1_substitution_rejected" {
+  check_dkg_part3_split_view_r1_substitution(
+    @moonfrost.ristretto255_sha512(),
+    "adv27-r255",
+  )
+  check_dkg_part3_split_view_r1_substitution(
+    @moonfrost.p256_sha256(),
+    "adv27-p256",
+  )
+}
+
+///|
+fn[S, E] check_vss_downgrade_and_zero_share(
+  ops : @frost.SuiteOps[S, E],
+  tag : String,
+) -> Unit raise {
+  let secret = (ops.scalar_from_u32)(42U)
+  // Leading coefficient = 0 would silently downgrade 2-of-3 into 1-of-3 -> must reject
+  assert_true(
+    @frost.secret_share_shard(ops, secret, [(ops.scalar_zero)()], 3)
+    is Err(@frost.FrostError::InvalidThreshold(_)),
+  )
+  assert_true(
+    @frost.trusted_dealer_keygen_with_secret(
+      ops,
+      secret,
+      [(ops.scalar_zero)()],
+      3,
+    )
+    is Err(@frost.FrostError::InvalidThreshold(_)),
+  )
+  // Zero secret in trusted_dealer_keygen_with_secret -> IdentityElement
+  assert_true(
+    @frost.trusted_dealer_keygen_with_secret(
+      ops,
+      (ops.scalar_zero)(),
+      [(ops.scalar_one)()],
+      3,
+    )
+    is Err(@frost.FrostError::IdentityElement),
+  )
+  // vss_verify with all-identity commitment & zero share -> must NOT return Ok(true)
+  let id_elem = (ops.element_identity)()
+  let id_comm : @frost.VssCommitment[E] = { coeffs: [id_elem, id_elem], }
+  assert_true(
+    @frost.vss_verify(ops, 1, (ops.scalar_zero)(), id_comm)
+    is Err(@frost.FrostError::IdentityElement),
+  )
+  // vss_verify with non-identity C_0 and C_1 = -C_0 evaluates to identity at id=1 -> reject
+  let g = (ops.element_generator)()
+  let cancel_comm : @frost.VssCommitment[E] = {
+    coeffs: [g, (ops.element_neg)(g)],
+  }
+  assert_true(
+    @frost.vss_verify(ops, 1, (ops.scalar_zero)(), cancel_comm)
+    is Err(@frost.FrostError::IdentityElement),
+  )
+  // derive_group_info rejects identity in higher-order coefficient C_1 and wrong length
+  let higher_id_comm : @frost.VssCommitment[E] = { coeffs: [g, id_elem], }
+  assert_true(
+    @frost.derive_group_info(ops, 3, 2, higher_id_comm)
+    is Err(@frost.FrostError::IdentityElement),
+  )
+  let wrong_len_comm : @frost.VssCommitment[E] = { coeffs: [g], }
+  assert_true(
+    @frost.derive_group_info(ops, 3, 2, wrong_len_comm)
+    is Err(@frost.FrostError::InvalidVssCommitment(_)),
+  )
+  // max_signers > 65535 overflow guard
+  let drbg = @moonfrost.drbg_from_seed(@crypto.ascii_bytes("\{tag}-cap"))
+  assert_true(
+    @moonfrost.trusted_dealer_keygen(ops, drbg, 70000, 2)
+    is Err(@frost.FrostError::InvalidThreshold(_)),
+  )
+}
+
+///|
+test "adversarial_28_vss_threshold_downgrade_and_zero_share_rejected" {
+  check_vss_downgrade_and_zero_share(
+    @moonfrost.ristretto255_sha512(),
+    "adv28-r255",
+  )
+  check_vss_downgrade_and_zero_share(@moonfrost.p256_sha256(), "adv28-p256")
+}
+
+///|
+fn[S, E] check_sign_out_of_range_peer_id(
+  ops : @frost.SuiteOps[S, E],
+  tag : String,
+) -> Unit raise {
+  let (kps, _, _) = adv_setup_dealer(ops, 3, 2, "\{tag}-dealer")
+  let msg = @crypto.ascii_bytes("\{tag}-msg")
+  let (nonces, comms) = adv_round1_commit_subset(ops, kps, [1, 3], "\{tag}-r1")
+  let out_of_range_comms : Array[@frost.CommitmentEntry[E]] = [
+    comms[0],
+    @frost.CommitmentEntry::new(9999, comms[1].commitments),
+  ]
+  assert_true(
+    @moonfrost.sign(ops, kps[0], nonces[0], msg, out_of_range_comms)
+    is Err(@frost.FrostError::InvalidParticipantId(9999)),
+  )
+  // Nonce must NOT have been consumed on rejected sign()
+  assert_eq(nonces[0].is_used(), false)
+}
+
+///|
+test "adversarial_29_sign_out_of_range_peer_id_rejected" {
+  check_sign_out_of_range_peer_id(
+    @moonfrost.ristretto255_sha512(),
+    "adv29-r255",
+  )
+  check_sign_out_of_range_peer_id(@moonfrost.p256_sha256(), "adv29-p256")
+}
+
+///|
+fn[S, E] check_aggregate_corrupted_pubkeys(
+  ops : @frost.SuiteOps[S, E],
+  tag : String,
+) -> Unit raise {
+  let (kps, pub_pkg, _) = adv_setup_dealer(ops, 3, 2, "\{tag}-dealer")
+  let msg = @crypto.ascii_bytes("\{tag}-msg")
+  let (nonces, comms) = adv_round1_commit_subset(ops, kps, [1, 3], "\{tag}-r1")
+  let shares = adv_round2_sign_subset(ops, kps, [1, 3], nonces, comms, msg)
+
+  // Corrupt honest P1's verifying_share to identity -> must return IdentityElement,
+  // NEVER falsely accuse honest P1 as CheaterDetected([1]).
+  let bad_shares_list : Array[(Int32, E)] = [
+    (1, (ops.element_identity)()),
+    pub_pkg.verifying_shares[1],
+    pub_pkg.verifying_shares[2],
+  ]
+  let bad_pub_identity : @frost.PublicKeyPackage[E] = {
+    verifying_shares: bad_shares_list,
+    verifying_key: pub_pkg.verifying_key,
+    min_signers: pub_pkg.min_signers,
+    max_signers: pub_pkg.max_signers,
+  }
+  assert_true(
+    @moonfrost.aggregate(ops, comms, msg, bad_pub_identity, shares)
+    is Err(@frost.FrostError::IdentityElement),
+  )
+
+  // Duplicate verifying_shares entry in pub_pkg -> DuplicateParticipant
+  let dup_pub : @frost.PublicKeyPackage[E] = {
+    verifying_shares: [
+      pub_pkg.verifying_shares[0],
+      pub_pkg.verifying_shares[0],
+      pub_pkg.verifying_shares[2],
+    ],
+    verifying_key: pub_pkg.verifying_key,
+    min_signers: pub_pkg.min_signers,
+    max_signers: pub_pkg.max_signers,
+  }
+  assert_true(
+    @moonfrost.aggregate(ops, comms, msg, dup_pub, shares)
+    is Err(@frost.FrostError::DuplicateParticipant(1)),
+  )
+}
+
+///|
+test "adversarial_30_aggregate_corrupted_pubkeys_no_false_accusation" {
+  check_aggregate_corrupted_pubkeys(
+    @moonfrost.ristretto255_sha512(),
+    "adv30-r255",
+  )
+  check_aggregate_corrupted_pubkeys(@moonfrost.p256_sha256(), "adv30-p256")
+}
+
+///|
+fn[S, E] check_aggregate_wrong_msg_and_wrong_group_pk(
+  ops : @frost.SuiteOps[S, E],
+  tag : String,
+) -> Unit raise {
+  let (kps, pub_pkg, _) = adv_setup_dealer(ops, 3, 2, "\{tag}-dealer")
+  let msg_signed = @crypto.ascii_bytes("\{tag}-signed")
+  let msg_wrong = @crypto.ascii_bytes("\{tag}-wrong")
+  let (nonces, comms) = adv_round1_commit_subset(ops, kps, [1, 3], "\{tag}-r1")
+  let shares = adv_round2_sign_subset(
+    ops,
+    kps,
+    [1, 3],
+    nonces,
+    comms,
+    msg_signed,
+  )
+
+  // Aggregating honest shares under wrong message -> both shares fail verification
+  match @moonfrost.aggregate(ops, comms, msg_wrong, pub_pkg, shares) {
+    Err(@frost.FrostError::CheaterDetected(ids)) => assert_eq(ids, [1, 3])
+    Err(e) => fail("\{tag}: expected CheaterDetected([1, 3]), got \{e}")
+    Ok(_) => fail("\{tag}: wrong message aggregate unexpectedly succeeded")
+  }
+
+  // Aggregating honest shares with mismatched group verifying_key (different PK)
+  let wrong_pk_pkg : @frost.PublicKeyPackage[E] = {
+    verifying_shares: pub_pkg.verifying_shares,
+    verifying_key: (ops.element_add)(
+      pub_pkg.verifying_key,
+      (ops.element_generator)(),
+    ),
+    min_signers: pub_pkg.min_signers,
+    max_signers: pub_pkg.max_signers,
+  }
+  match @moonfrost.aggregate(ops, comms, msg_signed, wrong_pk_pkg, shares) {
+    Err(@frost.FrostError::CheaterDetected(ids)) => assert_eq(ids, [1, 3])
+    Err(@frost.FrostError::InvalidSignature) => ()
+    Err(e) =>
+      fail("\{tag}: expected CheaterDetected or InvalidSignature, got \{e}")
+    Ok(_) => fail("\{tag}: wrong group PK aggregate unexpectedly succeeded")
+  }
+}
+
+///|
+test "adversarial_31_aggregate_wrong_msg_and_wrong_group_pk" {
+  check_aggregate_wrong_msg_and_wrong_group_pk(
+    @moonfrost.ristretto255_sha512(),
+    "adv31-r255",
+  )
+  check_aggregate_wrong_msg_and_wrong_group_pk(
+    @moonfrost.p256_sha256(),
+    "adv31-p256",
+  )
+}
+
+///|
+fn[S, E] check_dkg_malformed_packages_and_r1_dos(
+  ops : @frost.SuiteOps[S, E],
+  tag : String,
+) -> Unit raise {
+  let drbg = @moonfrost.drbg_from_seed(@crypto.ascii_bytes("\{tag}-dkg"))
+  // dkg_part1 out-of-range id > max_signers
+  assert_true(
+    @moonfrost.dkg_part1(ops, 4, 3, 2, drbg)
+    is Err(@frost.FrostError::InvalidParticipantId(4)),
+  )
+  let r1_secrets : Array[@frost.DkgRound1Secret[S]] = []
+  let r1_pkgs : Array[@frost.DkgRound1Package[S, E]] = []
+  for id = 1; id <= 3; id = id + 1 {
+    let (sec, pkg) = match @moonfrost.dkg_part1(ops, id, 3, 2, drbg) {
+      Ok(v) => v
+      Err(e) => fail("\{tag}: dkg_part1 failed: \{e}")
+    }
+    r1_secrets.push(sec)
+    r1_pkgs.push(pkg)
+  }
+
+  // dkg_part2 identifiable abort on peer C_0 == identity, C_1 == identity, wrong coeffs length
+  let bad_c0_pkgs : Array[@frost.DkgRound1Package[S, E]] = [
+    r1_pkgs[0],
+    {
+      identifier: 2,
+      commitment: {
+        coeffs: [(ops.element_identity)(), r1_pkgs[1].commitment.coeffs[1]],
+      },
+      pok_r: r1_pkgs[1].pok_r,
+      pok_mu: r1_pkgs[1].pok_mu,
+    },
+    r1_pkgs[2],
+  ]
+  match @moonfrost.dkg_part2(ops, r1_secrets[0], bad_c0_pkgs) {
+    Err(@frost.FrostError::InvalidDkgProof(ids)) => assert_eq(ids, [2])
+    Err(e) => fail("\{tag}: expected InvalidDkgProof([2]), got \{e}")
+    Ok(_) => fail("\{tag}: expected InvalidDkgProof([2]), got Ok")
+  }
+
+  let bad_c1_and_len_pkgs : Array[@frost.DkgRound1Package[S, E]] = [
+    r1_pkgs[0],
+    {
+      identifier: 2,
+      commitment: {
+        coeffs: [r1_pkgs[1].commitment.coeffs[0], (ops.element_identity)()],
+      },
+      pok_r: r1_pkgs[1].pok_r,
+      pok_mu: r1_pkgs[1].pok_mu,
+    },
+    {
+      identifier: 3,
+      commitment: { coeffs: [r1_pkgs[2].commitment.coeffs[0]], },
+      pok_r: r1_pkgs[2].pok_r,
+      pok_mu: r1_pkgs[2].pok_mu,
+    },
+  ]
+  match @moonfrost.dkg_part2(ops, r1_secrets[0], bad_c1_and_len_pkgs) {
+    Err(@frost.FrostError::InvalidDkgProof(ids)) => assert_eq(ids, [2, 3])
+    Err(e) => fail("\{tag}: expected InvalidDkgProof([2, 3]), got \{e}")
+    Ok(_) => fail("\{tag}: expected InvalidDkgProof([2, 3]), got Ok")
+  }
+
+  // dkg_part2 structural errors: duplicate, insufficient, extra, out-of-range ID, own commitment mismatch
+  assert_true(
+    @moonfrost.dkg_part2(ops, r1_secrets[0], [
+      r1_pkgs[0],
+      r1_pkgs[1],
+      r1_pkgs[1],
+    ])
+    is Err(@frost.FrostError::DuplicateParticipant(2)),
+  )
+  assert_true(
+    @moonfrost.dkg_part2(ops, r1_secrets[0], [r1_pkgs[0], r1_pkgs[1]])
+    is Err(@frost.FrostError::InsufficientParticipants(2, 3)),
+  )
+  assert_true(
+    @moonfrost.dkg_part2(ops, r1_secrets[0], [
+      r1_pkgs[0],
+      r1_pkgs[1],
+      r1_pkgs[2],
+      r1_pkgs[2],
+    ])
+    is Err(@frost.FrostError::InvalidParameters(_)),
+  )
+  assert_true(
+    @moonfrost.dkg_part2(ops, r1_secrets[0], [
+      {
+        identifier: 1,
+        commitment: r1_pkgs[1].commitment,
+        pok_r: r1_pkgs[0].pok_r,
+        pok_mu: r1_pkgs[0].pok_mu,
+      },
+      r1_pkgs[1],
+      r1_pkgs[2],
+    ])
+    is Err(@frost.FrostError::CommitmentMismatch(1)),
+  )
+
+  // Honest Round 2 -> test Round 3 structural rejections (wrong receiver, sender==own, duplicate, missing)
+  let (p1_r2_sec, _) = match @moonfrost.dkg_part2(ops, r1_secrets[0], r1_pkgs) {
+    Ok(v) => v
+    Err(e) => fail("\{tag}: honest dkg_part2 failed: \{e}")
+  }
+  let (_, p2_r2_out) = match @moonfrost.dkg_part2(ops, r1_secrets[1], r1_pkgs) {
+    Ok(v) => v
+    Err(e) => fail("\{tag}: honest P2 dkg_part2 failed: \{e}")
+  }
+  let (_, p3_r2_out) = match @moonfrost.dkg_part2(ops, r1_secrets[2], r1_pkgs) {
+    Ok(v) => v
+    Err(e) => fail("\{tag}: honest P3 dkg_part2 failed: \{e}")
+  }
+  let p2_to_p1 = p2_r2_out[0]
+  let p3_to_p1 = p3_r2_out[0]
+  assert_true(
+    @moonfrost.dkg_part3(ops, p1_r2_sec, r1_pkgs, [p2_to_p1])
+    is Err(@frost.FrostError::InsufficientParticipants(1, 2)),
+  )
+  assert_true(
+    @moonfrost.dkg_part3(ops, p1_r2_sec, r1_pkgs, [
+      { sender: 2, receiver: 3, secret_share: p2_to_p1.secret_share, },
+      p3_to_p1,
+    ])
+    is Err(@frost.FrostError::InvalidParticipantId(3)),
+  )
+  assert_true(
+    @moonfrost.dkg_part3(ops, p1_r2_sec, r1_pkgs, [
+      { sender: 1, receiver: 1, secret_share: p2_to_p1.secret_share, },
+      p3_to_p1,
+    ])
+    is Err(@frost.FrostError::InvalidParticipantId(1)),
+  )
+  assert_true(
+    @moonfrost.dkg_part3(ops, p1_r2_sec, r1_pkgs, [p2_to_p1, p2_to_p1])
+    is Err(@frost.FrostError::DuplicateParticipant(2)),
+  )
+}
+
+///|
+test "adversarial_32_dkg_malformed_packages_and_identifiable_r1_dos" {
+  check_dkg_malformed_packages_and_r1_dos(
+    @moonfrost.ristretto255_sha512(),
+    "adv32-r255",
+  )
+  check_dkg_malformed_packages_and_r1_dos(
+    @moonfrost.p256_sha256(),
+    "adv32-p256",
+  )
+}
+
+///|
+test "adversarial_33_deserialize_signature_and_serialize_edge_cases" {
+  // Ristretto255
+  let r255 = @moonfrost.ristretto255_sha512()
+  let bad_r_r255 : @frost.Signature[
+    @ristretto255.Scalar,
+    @ristretto255.RistrettoPoint,
+  ] = { r: (r255.element_identity)(), z: (r255.scalar_one)(), }
+  assert_true(
+    @moonfrost.serialize_signature(r255, bad_r_r255)
+    is Err(@frost.FrostError::IdentityElement),
+  )
+  // 32 zero bytes (identity R) + valid z -> InvalidElement
+  let zero_r_r255 = @crypto.concat_bytes([
+    Bytes::make(32, b'\x00'),
+    (r255.serialize_scalar)((r255.scalar_one)()),
+  ])
+  assert_true(
+    @moonfrost.deserialize_signature(r255, zero_r_r255)
+    is Err(@frost.FrostError::InvalidElement(_)),
+  )
+  // Valid R + non-canonical z (0xff * 32) -> InvalidScalar
+  let valid_r_r255 = match
+    (r255.serialize_element)((r255.element_generator)()) {
+    Ok(b) => b
+    Err(e) => fail("serialize_element failed: \{e}")
+  }
+  let bad_z_r255 = @crypto.concat_bytes([valid_r_r255, Bytes::make(32, b'\xff')])
+  assert_true(
+    @moonfrost.deserialize_signature(r255, bad_z_r255)
+    is Err(@frost.FrostError::InvalidScalar(_)),
+  )
+
+  // P-256
+  let p256 = @moonfrost.p256_sha256()
+  let bad_r_p256 : @frost.Signature[@p256.Scalar, @p256.P256Point] = {
+    r: (p256.element_identity)(),
+    z: (p256.scalar_one)(),
+  }
+  assert_true(
+    @moonfrost.serialize_signature(p256, bad_r_p256)
+    is Err(@frost.FrostError::IdentityElement),
+  )
+  let zero_r_p256 = @crypto.concat_bytes([
+    Bytes::make(33, b'\x00'),
+    (p256.serialize_scalar)((p256.scalar_one)()),
+  ])
+  assert_true(
+    @moonfrost.deserialize_signature(p256, zero_r_p256)
+    is Err(@frost.FrostError::InvalidElement(_)),
+  )
+  let valid_r_p256 = match
+    (p256.serialize_element)((p256.element_generator)()) {
+    Ok(b) => b
+    Err(e) => fail("serialize_element failed: \{e}")
+  }
+  let bad_z_p256 = @crypto.concat_bytes([valid_r_p256, Bytes::make(32, b'\xff')])
+  assert_true(
+    @moonfrost.deserialize_signature(p256, bad_z_p256)
+    is Err(@frost.FrostError::InvalidScalar(_)),
+  )
+}
+
+///|
+fn[S, E] check_sign_overflow_and_prime_order_edges(
+  ops : @frost.SuiteOps[S, E],
+  tag : String,
+) -> Unit raise {
+  let (kps, pub_pkg, _) = adv_setup_dealer(ops, 3, 2, "\{tag}-dealer")
+  let msg = @crypto.ascii_bytes("\{tag}-msg")
+  let (nonces, comms) = adv_round1_commit_subset(
+    ops,
+    kps,
+    [1, 2, 3],
+    "\{tag}-r1",
+  )
+
+  // Signer not present in commitment_list -> InvalidParticipantId
+  let without_p1 : Array[@frost.CommitmentEntry[E]] = [comms[1], comms[2]]
+  assert_true(
+    @moonfrost.sign(ops, kps[0], nonces[0], msg, without_p1)
+    is Err(@frost.FrostError::InvalidParticipantId(1)),
+  )
+  assert_eq(nonces[0].is_used(), false)
+
+  // commitment_list.length() > max_signers -> InvalidParameters
+  let too_many : Array[@frost.CommitmentEntry[E]] = [
+    comms[0],
+    comms[1],
+    comms[2],
+    @frost.CommitmentEntry::new(4, comms[2].commitments),
+  ]
+  assert_true(
+    @moonfrost.sign(ops, kps[0], nonces[0], msg, too_many)
+    is Err(@frost.FrostError::InvalidParameters(_)),
+  )
+
+  // nonce_generate_with_randomness rejects non-32-byte randomness
+  assert_true(
+    @frost.nonce_generate_with_randomness(
+      ops,
+      kps[0].signing_share,
+      Bytes::make(31, b'\x42'),
+    )
+    is Err(@frost.FrostError::InvalidParameters(_)),
+  )
+
+  // prime_order_sign rejects zero secret key, succeeds on valid key and verifies
+  let drbg = @moonfrost.drbg_from_seed(@crypto.ascii_bytes("\{tag}-po"))
+  assert_true(
+    @moonfrost.prime_order_sign(ops, msg, (ops.scalar_zero)(), drbg)
+    is Err(@frost.FrostError::IdentityElement),
+  )
+  let sk = @frost.random_nonzero_scalar(ops, drbg)
+  let pk = (ops.scalar_base_mul)(sk)
+  let po_sig = match @moonfrost.prime_order_sign(ops, msg, sk, drbg) {
+    Ok(s) => s
+    Err(e) => fail("\{tag}: prime_order_sign failed: \{e}")
+  }
+  assert_eq(@moonfrost.prime_order_verify(ops, msg, po_sig, pk), Ok(true))
+
+  // verify_signature_share error paths: invalid ID, identity verifying_share, commitment mismatch
+  let bad_share = (ops.scalar_one)()
+  assert_true(
+    @moonfrost.verify_signature_share(
+      ops,
+      0,
+      kps[0].verifying_share,
+      comms[0].commitments,
+      bad_share,
+      comms,
+      pub_pkg.verifying_key,
+      msg,
+    )
+    is Err(@frost.FrostError::InvalidParticipantId(0)),
+  )
+  assert_true(
+    @moonfrost.verify_signature_share(
+      ops,
+      1,
+      (ops.element_identity)(),
+      comms[0].commitments,
+      bad_share,
+      comms,
+      pub_pkg.verifying_key,
+      msg,
+    )
+    is Err(@frost.FrostError::IdentityElement),
+  )
+  assert_true(
+    @moonfrost.verify_signature_share(
+      ops,
+      1,
+      kps[0].verifying_share,
+      comms[1].commitments,
+      bad_share,
+      comms,
+      pub_pkg.verifying_key,
+      msg,
+    )
+    is Err(@frost.FrostError::CommitmentMismatch(1)),
+  )
+}
+
+///|
+test "adversarial_34_sign_overflow_list_and_prime_order_sign_zero_key" {
+  check_sign_overflow_and_prime_order_edges(
+    @moonfrost.ristretto255_sha512(),
+    "adv34-r255",
+  )
+  check_sign_overflow_and_prime_order_edges(
+    @moonfrost.p256_sha256(),
+    "adv34-p256",
   )
 }
