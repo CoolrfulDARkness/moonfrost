@@ -1,0 +1,8 @@
+import {
+  "CoolrfulDARkness/moonfrost",
+  "CoolrfulDARkness/moonfrost/frost",
+  "CoolrfulDARkness/moonfrost/crypto",
+  "CoolrfulDARkness/moonfrost/ristretto255",
+  "CoolrfulDARkness/moonfrost/p256",
+  "moonbitlang/core/bench",
+} for "test"
