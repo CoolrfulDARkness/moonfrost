@@ -7,14 +7,18 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   static-gates:
-    name: Format, Zero-FFI & Docs Sync Gates
+    name: Format, .mbti Sync, Zero-FFI & Docs Sync Gates
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,32 +34,110 @@ jobs:
       - name: Check formatting (moon fmt --check)
         run: moon fmt --check
 
-      - name: Zero-FFI static gate (forbid extern declarations)
+      - name: Check .mbti interface sync (moon info)
+        run: moon info && git diff --exit-code -- '*.mbti'
+
+      - name: Zero-FFI static gate (.mbt, .mbt.md & moon.pkg)
         run: |
           python3 - <<'PY'
           import pathlib, re, sys
 
           root = pathlib.Path(".")
           skip_dirs = {".git", "_build", ".mooncakes", "target"}
-          pattern = re.compile(r"\bextern\b")
+
+          # Single-pass tokenizer so "//" inside string literals is not mistaken for a comment.
+          TOKEN_RE = re.compile(r'//.*|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
+          EXTERN_RE = re.compile(r"\bextern\b")
+          INLINE_FFI_RE = re.compile(r'(?:\bfn\s+.*)?=\s*"[^"]+"\s+"[^"]+"')
+          PKG_FFI_RE = re.compile(r"\b(?:native-stub|cc-flags|cc-link-flags)\b")
+          FENCE_OPEN_RE = re.compile(r"^\s*(`{3,})\s*(mbt|moonbit)(?:\s|$)")
+
+          def should_skip(path: pathlib.Path) -> bool:
+              return any(part in skip_dirs or part.startswith("target-") for part in path.parts)
+
+          def strip_comments_and_strings(line: str) -> tuple[str, str]:
+              if line.lstrip().startswith(("#|", "$|")):
+                  return "", ""
+              no_str = TOKEN_RE.sub(" ", line)
+              def repl_placeholder(m: re.Match) -> str:
+                  tok = m.group(0)
+                  if tok.startswith("//"):
+                      return ""
+                  if tok.startswith('"'):
+                      return '"STR"'
+                  return "'C'"
+              with_placeholder = TOKEN_RE.sub(repl_placeholder, line)
+              return no_str, with_placeholder
+
+          def strip_pkg_comments(line: str) -> str:
+              def repl(m: re.Match) -> str:
+                  tok = m.group(0)
+                  return "" if tok.startswith("//") else tok
+              return TOKEN_RE.sub(repl, line)
+
+          def iter_mbt_md_code_lines(text: str):
+              in_fence = False
+              fence_len = 0
+              for lineno, line in enumerate(text.splitlines(), start=1):
+                  if not in_fence:
+                      m = FENCE_OPEN_RE.match(line)
+                      if m:
+                          in_fence = True
+                          fence_len = len(m.group(1))
+                  else:
+                      if re.match(rf"^\s*`{{{fence_len},}}\s*$", line):
+                          in_fence = False
+                          fence_len = 0
+                      else:
+                          yield lineno, line
+
           violations = []
+          mbt_count = 0
+          mbt_md_count = 0
+          pkg_count = 0
 
           for path in sorted(root.rglob("*.mbt")):
-              if any(part in skip_dirs or part.startswith("target-") for part in path.parts):
+              if should_skip(path):
                   continue
-              text = path.read_text(encoding="utf-8")
-              for lineno, line in enumerate(text.splitlines(), start=1):
-                  code_only = line.split("//", 1)[0]
-                  if pattern.search(code_only):
-                      violations.append(f"{path}:{lineno}: {line.strip()}")
+              mbt_count += 1
+              for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                  no_str, with_placeholder = strip_comments_and_strings(line)
+                  if EXTERN_RE.search(no_str):
+                      violations.append(f"{path}:{lineno}: forbidden `extern`: {line.strip()}")
+                  elif INLINE_FFI_RE.search(with_placeholder):
+                      violations.append(f"{path}:{lineno}: forbidden inline FFI: {line.strip()}")
+
+          for path in sorted(root.rglob("*.mbt.md")):
+              if should_skip(path):
+                  continue
+              mbt_md_count += 1
+              for lineno, line in iter_mbt_md_code_lines(path.read_text(encoding="utf-8")):
+                  no_str, with_placeholder = strip_comments_and_strings(line)
+                  if EXTERN_RE.search(no_str):
+                      violations.append(f"{path}:{lineno}: forbidden `extern`: {line.strip()}")
+                  elif INLINE_FFI_RE.search(with_placeholder):
+                      violations.append(f"{path}:{lineno}: forbidden inline FFI: {line.strip()}")
+
+          for pkg_name in ("moon.pkg", "moon.pkg.json"):
+              for path in sorted(root.rglob(pkg_name)):
+                  if should_skip(path):
+                      continue
+                  pkg_count += 1
+                  for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                      code_only = strip_pkg_comments(line)
+                      if PKG_FFI_RE.search(code_only):
+                          violations.append(f"{path}:{lineno}: forbidden FFI pkg config: {line.strip()}")
 
           if violations:
-              print("ERROR: Zero-FFI gate failed! Found `extern` in MoonBit source:")
+              print("ERROR: Zero-FFI gate failed! Found forbidden FFI declarations or package config:")
               for v in violations:
                   print("  " + v)
               sys.exit(1)
 
-          print("PASS: Zero `extern` FFI declarations found across all .mbt sources.")
+          print(
+              f"PASS: Zero FFI found across {mbt_count} .mbt files, "
+              f"{mbt_md_count} .mbt.md files, and {pkg_count} moon.pkg manifests."
+          )
           PY
 
       - name: Verify README.md and README.mbt.md are in sync
@@ -65,6 +147,7 @@ jobs:
     name: Check, Test & CLI Smoke (${{ matrix.target }})
     needs: static-gates
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -84,8 +167,8 @@ jobs:
           curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
           echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
 
-      - name: Strict zero-warning check (moon check -d)
-        run: moon check --target ${{ matrix.target }} -d
+      - name: Strict zero-warning check (moon check --no-mbti -d)
+        run: moon check --no-mbti --target ${{ matrix.target }} -d
 
       - name: Full test suite with zero warnings (moon test -d)
         run: moon test --target ${{ matrix.target }} -d
@@ -97,6 +180,7 @@ jobs:
     name: Benchmark Verification (${{ matrix.target }})
     needs: test-matrix
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
