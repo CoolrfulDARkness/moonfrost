@@ -99,6 +99,20 @@ pub fn zeroize_bytes(buf : FixedArray[Byte]) -> Unit {
 }
 
 ///|
+/// Overwrites every element of `buf` with `0U` (package-internal helper).
+fn zeroize_u32(buf : FixedArray[UInt32]) -> Unit {
+  let len = buf.length()
+  for i = 0; i < len; i = i + 1 {
+    buf[i] = 0U
+  }
+  let mut acc = 0UL
+  for i = 0; i < len; i = i + 1 {
+    acc = acc | buf[i].to_uint64()
+  }
+  zeroize_sink[0] = zeroize_sink[0] ^ acc
+}
+
+///|
 /// Overwrites every element of `buf` with `0UL`.
 pub fn zeroize_u64(buf : FixedArray[UInt64]) -> Unit {
   let len = buf.length()

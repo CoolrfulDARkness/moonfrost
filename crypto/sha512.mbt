@@ -137,7 +137,7 @@ pub fn Sha512::update(self : Sha512, data : Bytes) -> Unit {
       self.buf_len = 0
     }
   }
-  while offset + 128 <= len {
+  while len - offset >= 128 {
     for i = 0; i < 128; i = i + 1 {
       self.buf[i] = data[offset + i]
     }
@@ -149,6 +149,16 @@ pub fn Sha512::update(self : Sha512, data : Bytes) -> Unit {
     self.buf_len = self.buf_len + 1
     offset = offset + 1
   }
+}
+
+///|
+/// Securely wipes the internal SHA-512 state and input buffer.
+pub fn Sha512::zeroize(self : Sha512) -> Unit {
+  zeroize_u64(self.state)
+  zeroize_bytes(self.buf)
+  self.buf_len = 0
+  self.total_bytes_lo = 0UL
+  self.total_bytes_hi = 0UL
 }
 
 ///|
@@ -199,6 +209,8 @@ pub fn Sha512::finalize(self : Sha512) -> Bytes {
     out[i * 8 + 6] = ((v >> 8) & 0xffUL).to_byte()
     out[i * 8 + 7] = (v & 0xffUL).to_byte()
   }
+  zeroize_u64(st)
+  zeroize_bytes(block)
   Bytes::from_array(out)
 }
 
@@ -207,7 +219,9 @@ pub fn Sha512::finalize(self : Sha512) -> Bytes {
 pub fn sha512(data : Bytes) -> Bytes {
   let h = Sha512::new()
   h.update(data)
-  h.finalize()
+  let digest = h.finalize()
+  h.zeroize()
+  digest
 }
 
 ///|
@@ -217,5 +231,7 @@ pub fn sha512_concat(parts : Array[Bytes]) -> Bytes {
   for i = 0; i < parts.length(); i = i + 1 {
     h.update(parts[i])
   }
-  h.finalize()
+  let digest = h.finalize()
+  h.zeroize()
+  digest
 }

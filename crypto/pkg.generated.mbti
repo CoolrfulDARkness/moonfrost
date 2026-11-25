@@ -49,6 +49,7 @@ pub struct Drbg {
 pub fn Drbg::from_seed(Bytes) -> Self
 pub fn Drbg::next_bytes(Self, Int32) -> Bytes
 pub fn Drbg::reseed(Self, Bytes) -> Unit
+pub fn Drbg::zeroize(Self) -> Unit
 
 pub struct Sha256 {
   // private fields
@@ -56,6 +57,7 @@ pub struct Sha256 {
 pub fn Sha256::finalize(Self) -> Bytes
 pub fn Sha256::new() -> Self
 pub fn Sha256::update(Self, Bytes) -> Unit
+pub fn Sha256::zeroize(Self) -> Unit
 
 pub struct Sha512 {
   // private fields
@@ -63,6 +65,7 @@ pub struct Sha512 {
 pub fn Sha512::finalize(Self) -> Bytes
 pub fn Sha512::new() -> Self
 pub fn Sha512::update(Self, Bytes) -> Unit
+pub fn Sha512::zeroize(Self) -> Unit
 
 // Type aliases
 

@@ -116,7 +116,7 @@ pub fn Sha256::update(self : Sha256, data : Bytes) -> Unit {
       self.buf_len = 0
     }
   }
-  while offset + 64 <= len {
+  while len - offset >= 64 {
     for i = 0; i < 64; i = i + 1 {
       self.buf[i] = data[offset + i]
     }
@@ -128,6 +128,15 @@ pub fn Sha256::update(self : Sha256, data : Bytes) -> Unit {
     self.buf_len = self.buf_len + 1
     offset = offset + 1
   }
+}
+
+///|
+/// Securely wipes the internal SHA-256 state and input buffer.
+pub fn Sha256::zeroize(self : Sha256) -> Unit {
+  zeroize_u32(self.state)
+  zeroize_bytes(self.buf)
+  self.buf_len = 0
+  self.total_bytes = 0UL
 }
 
 ///|
@@ -172,6 +181,8 @@ pub fn Sha256::finalize(self : Sha256) -> Bytes {
     out[i * 4 + 2] = ((v >> 8) & 0xffU).to_byte()
     out[i * 4 + 3] = (v & 0xffU).to_byte()
   }
+  zeroize_u32(st)
+  zeroize_bytes(block)
   Bytes::from_array(out)
 }
 
@@ -180,7 +191,9 @@ pub fn Sha256::finalize(self : Sha256) -> Bytes {
 pub fn sha256(data : Bytes) -> Bytes {
   let h = Sha256::new()
   h.update(data)
-  h.finalize()
+  let digest = h.finalize()
+  h.zeroize()
+  digest
 }
 
 ///|
@@ -190,5 +203,7 @@ pub fn sha256_concat(parts : Array[Bytes]) -> Bytes {
   for i = 0; i < parts.length(); i = i + 1 {
     h.update(parts[i])
   }
-  h.finalize()
+  let digest = h.finalize()
+  h.zeroize()
+  digest
 }

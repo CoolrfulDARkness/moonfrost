@@ -238,6 +238,8 @@ fn ct_table_lookup(table : FixedArray[P256Point], nibble : UInt64) -> P256Point 
 }
 
 // Constant-time scalar multiplication via 4-bit fixed window + CT 16-entry table scan.
+// Extracts 4-bit windows directly from canonical 64-bit limbs without allocating
+// an immutable secret `Bytes` buffer on the heap.
 
 ///|
 pub fn P256Point::scalar_mul(self : P256Point, s : Scalar) -> P256Point {
@@ -250,20 +252,20 @@ pub fn P256Point::scalar_mul(self : P256Point, s : Scalar) -> P256Point {
     table[i] = table[i - 1].add(self)
   }
 
-  let scalar_bytes = s.to_bytes()
+  let (l0, l1, l2, l3) = s.to_canonical_limbs()
   let mut acc = P256Point::identity()
-  for byte_idx = 0; byte_idx < 32; byte_idx = byte_idx + 1 {
-    let byte_val = scalar_bytes[byte_idx].to_uint64()
-    let hi_nib = (byte_val >> 4) & 0x0fUL
-    let lo_nib = byte_val & 0x0fUL
-
+  for k = 63; k >= 0; k = k - 1 {
+    let limb = match k >> 4 {
+      3 => l3
+      2 => l2
+      1 => l1
+      _ => l0
+    }
+    let shift = (k & 15) * 4
+    let nib = (limb >> shift) & 0x0fUL
     acc = acc.double().double().double().double()
-    let p_hi = ct_table_lookup(table, hi_nib)
-    acc = acc.add(p_hi)
-
-    acc = acc.double().double().double().double()
-    let p_lo = ct_table_lookup(table, lo_nib)
-    acc = acc.add(p_lo)
+    let p_nib = ct_table_lookup(table, nib)
+    acc = acc.add(p_nib)
   }
   acc
 }

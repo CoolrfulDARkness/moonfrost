@@ -27,6 +27,9 @@ fn hex_char_to_nibble(c : Int32) -> Int32? {
 /// Encodes `data` into a lowercase hexadecimal `String`.
 pub fn bytes_to_hex(data : Bytes) -> String {
   let len = data.length()
+  if len > 0x3fff_ffff {
+    abort("bytes_to_hex: input length overflow")
+  }
   let sb = StringBuilder(capacity=len * 2)
   for i = 0; i < len; i = i + 1 {
     let b = data[i].to_int()
@@ -79,7 +82,11 @@ pub fn ascii_bytes(s : String) -> Bytes {
 pub fn concat_bytes(parts : Array[Bytes]) -> Bytes {
   let mut total = 0
   for i = 0; i < parts.length(); i = i + 1 {
-    total = total + parts[i].length()
+    let part_len = parts[i].length()
+    if total > 0x7fff_ffff - part_len {
+      abort("concat_bytes: total length overflow")
+    }
+    total = total + part_len
   }
   let out = FixedArray::make(total, b'\x00')
   let mut offset = 0

@@ -179,6 +179,16 @@ fn Scalar::from_mont(self : Scalar) -> Scalar {
 }
 
 ///|
+/// Converts a Montgomery-form scalar into its canonical 4x64-bit little-endian
+/// limbs `(l0, l1, l2, l3)` in `[0, n - 1]` without allocating a `Bytes` buffer.
+fn Scalar::to_canonical_limbs(
+  self : Scalar,
+) -> (UInt64, UInt64, UInt64, UInt64) {
+  let canon = self.from_mont()
+  (canon.l0, canon.l1, canon.l2, canon.l3)
+}
+
+///|
 pub fn Scalar::from_u32(n : UInt32) -> Scalar {
   Scalar::to_mont(n.to_uint64(), 0UL, 0UL, 0UL)
 }

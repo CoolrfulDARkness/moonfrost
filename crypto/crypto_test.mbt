@@ -4,7 +4,7 @@
 /// - RFC 9380 Appendix K.1 expand_message_xmd(SHA-256) official vectors
 /// - RFC 9591 Appendix E.4 FROST(P-256, SHA-256) P1 hiding_nonce H3 verification
 /// - Constant-time primitives and zeroization
-/// - ChaCha20 DRBG determinism, chunking equivalence, and reseeding
+/// - ChaCha20 DRBG determinism, fast-key-erasure ratcheting, zeroize, and reseeding
 /// - Hex encoding/decoding and edge-case rejections
 
 ///|
@@ -359,36 +359,96 @@ test "ct_primitives_and_zeroize" {
 }
 
 ///|
-test "drbg_determinism_and_reseed" {
+test "drbg_determinism_fast_key_erasure_and_reseed" {
   let seed = @crypto.ascii_bytes("moonfrost-test-seed-1")
   let d1 = @crypto.Drbg::from_seed(seed)
   let d2 = @crypto.Drbg::from_seed(seed)
   let b1 = d1.next_bytes(96)
-  let b2 = @crypto.concat_bytes([
-    d2.next_bytes(17),
-    d2.next_bytes(47),
-    d2.next_bytes(32),
-  ])
+  let b2 = d2.next_bytes(96)
   assert_eq(b1.length(), 96)
+  // Determinism preserved after fast-key-erasure ratchet
   assert_true(@crypto.ct_eq_bytes(b1, b2))
+  let c1 = d1.next_bytes(32)
+  let c2 = d2.next_bytes(32)
+  assert_true(@crypto.ct_eq_bytes(c1, c2))
+  // Consecutive next_bytes calls produce independent distinct outputs
+  let c3 = d1.next_bytes(32)
+  let c4 = d1.next_bytes(48)
+  let c5 = d1.next_bytes(64)
+  assert_true(!@crypto.ct_eq_bytes(c1, c3))
+  assert_eq(c4.length(), 48)
+  assert_eq(c5.length(), 64)
+  // Fast-key-erasure ratchets key between calls, so split calls match prefix
+  // before the first ratchet and diverge afterward.
+  let d_split = @crypto.Drbg::from_seed(seed)
+  let p1 = d_split.next_bytes(17)
+  let p2 = d_split.next_bytes(47)
+  let p3 = d_split.next_bytes(32)
+  let joined = @crypto.concat_bytes([p1, p2, p3])
+  assert_eq(joined.length(), 96)
+  for i = 0; i < 17; i = i + 1 {
+    assert_eq(p1[i], b1[i])
+  }
+  assert_true(!@crypto.ct_eq_bytes(b1, joined))
   // Different seed produces different stream
   let d3 = @crypto.Drbg::from_seed(@crypto.ascii_bytes("moonfrost-test-seed-2"))
   assert_true(!@crypto.ct_eq_bytes(b1, d3.next_bytes(96)))
-  // Zero / negative length returns empty bytes
-  assert_eq(d1.next_bytes(0).length(), 0)
-  assert_eq(d1.next_bytes(-5).length(), 0)
+  // Zero / negative length returns empty bytes without panic or state drift
+  let d_noop_a = @crypto.Drbg::from_seed(seed)
+  let d_noop_b = @crypto.Drbg::from_seed(seed)
+  assert_eq(d_noop_a.next_bytes(0).length(), 0)
+  assert_eq(d_noop_a.next_bytes(-1).length(), 0)
+  assert_eq(d_noop_a.next_bytes(-5).length(), 0)
+  assert_true(
+    @crypto.ct_eq_bytes(d_noop_a.next_bytes(32), d_noop_b.next_bytes(32)),
+  )
   // Reseed changes stream deterministically
   let d4 = @crypto.Drbg::from_seed(seed)
   let _ = d4.next_bytes(96)
   let d5 = @crypto.Drbg::from_seed(seed)
   let _ = d5.next_bytes(96)
-  let no_reseed = d5.next_bytes(32)
-  d1.reseed(@crypto.ascii_bytes("extra-entropy"))
+  let d6 = @crypto.Drbg::from_seed(seed)
+  let _ = d6.next_bytes(96)
+  let no_reseed = d6.next_bytes(32)
   d4.reseed(@crypto.ascii_bytes("extra-entropy"))
-  let after_reseed_1 = d1.next_bytes(32)
+  d5.reseed(@crypto.ascii_bytes("extra-entropy"))
   let after_reseed_4 = d4.next_bytes(32)
-  assert_true(@crypto.ct_eq_bytes(after_reseed_1, after_reseed_4))
-  assert_true(!@crypto.ct_eq_bytes(after_reseed_1, no_reseed))
+  let after_reseed_5 = d5.next_bytes(32)
+  assert_true(@crypto.ct_eq_bytes(after_reseed_4, after_reseed_5))
+  assert_true(!@crypto.ct_eq_bytes(after_reseed_4, no_reseed))
+  // Drbg::zeroize wipes state cleanly and remains safe on 0 / -1 lengths
+  let dz1 = @crypto.Drbg::from_seed(seed)
+  let dz2 = @crypto.Drbg::from_seed(@crypto.ascii_bytes("other-seed"))
+  let dz_ctrl = @crypto.Drbg::from_seed(seed)
+  let _ = dz1.next_bytes(16)
+  let _ = dz_ctrl.next_bytes(16)
+  dz1.zeroize()
+  dz2.zeroize()
+  assert_eq(dz1.next_bytes(0).length(), 0)
+  assert_eq(dz1.next_bytes(-1).length(), 0)
+  let z_out1 = dz1.next_bytes(32)
+  let z_out2 = dz2.next_bytes(32)
+  let ctrl_out = dz_ctrl.next_bytes(32)
+  assert_true(@crypto.ct_eq_bytes(z_out1, z_out2))
+  assert_true(!@crypto.ct_eq_bytes(z_out1, ctrl_out))
+}
+
+///|
+test "sha256_and_sha512_zeroize" {
+  let h256 = @crypto.Sha256::new()
+  h256.update(@crypto.ascii_bytes("sensitive-secret-input"))
+  let before256 = h256.finalize()
+  h256.zeroize()
+  let after256 = h256.finalize()
+  assert_eq(after256.length(), 32)
+  assert_true(!@crypto.ct_eq_bytes(before256, after256))
+  let h512 = @crypto.Sha512::new()
+  h512.update(@crypto.ascii_bytes("sensitive-secret-input"))
+  let before512 = h512.finalize()
+  h512.zeroize()
+  let after512 = h512.finalize()
+  assert_eq(after512.length(), 64)
+  assert_true(!@crypto.ct_eq_bytes(before512, after512))
 }
 
 ///|

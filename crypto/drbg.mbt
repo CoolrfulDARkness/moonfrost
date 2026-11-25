@@ -26,6 +26,14 @@ fn read_le_u32_bytes(b : Bytes, offset : Int32) -> UInt32 {
 }
 
 ///|
+fn read_le_u32_fixed(b : FixedArray[Byte], offset : Int32) -> UInt32 {
+  b[offset].to_uint() |
+  (b[offset + 1].to_uint() << 8) |
+  (b[offset + 2].to_uint() << 16) |
+  (b[offset + 3].to_uint() << 24)
+}
+
+///|
 fn write_le_u32(out : FixedArray[Byte], offset : Int32, v : UInt32) -> Unit {
   out[offset] = (v & 0xffU).to_byte()
   out[offset + 1] = ((v >> 8) & 0xffU).to_byte()
@@ -90,6 +98,19 @@ fn chacha20_block(
   for i = 0; i < 16; i = i + 1 {
     write_le_u32(out, i * 4, work[i] + init[i])
   }
+  zeroize_u32(init)
+  zeroize_u32(work)
+}
+
+///|
+fn Drbg::increment_nonce(self : Drbg) -> Unit {
+  self.nonce[0] = self.nonce[0] + 1U
+  if self.nonce[0] == 0U {
+    self.nonce[1] = self.nonce[1] + 1U
+    if self.nonce[1] == 0U {
+      self.nonce[2] = self.nonce[2] + 1U
+    }
+  }
 }
 
 ///|
@@ -98,13 +119,7 @@ fn Drbg::refill(self : Drbg) -> Unit {
   self.buf_pos = 0
   self.counter = self.counter + 1U
   if self.counter == 0U {
-    self.nonce[0] = self.nonce[0] + 1U
-    if self.nonce[0] == 0U {
-      self.nonce[1] = self.nonce[1] + 1U
-      if self.nonce[1] == 0U {
-        self.nonce[2] = self.nonce[2] + 1U
-      }
-    }
+    self.increment_nonce()
   }
 }
 
@@ -126,7 +141,8 @@ pub fn Drbg::from_seed(seed : Bytes) -> Drbg {
 }
 
 ///|
-/// Generates `len` pseudorandom bytes from the DRBG stream.
+/// Generates `len` pseudorandom bytes from the DRBG stream with DJB
+/// fast-key-erasure ratcheting for backtracking resistance (forward secrecy).
 /// Returns empty `Bytes` if `len <= 0`.
 pub fn Drbg::next_bytes(self : Drbg, len : Int32) -> Bytes {
   if len <= 0 {
@@ -143,11 +159,34 @@ pub fn Drbg::next_bytes(self : Drbg, len : Int32) -> Bytes {
     let take = if avail < need { avail } else { need }
     for i = 0; i < take; i = i + 1 {
       out[offset + i] = self.buf[self.buf_pos + i]
+      self.buf[self.buf_pos + i] = b'\x00'
     }
     self.buf_pos = self.buf_pos + take
     offset = offset + take
   }
+  // DJB fast-key-erasure key ratchet: derive a fresh 256-bit key directly from
+  // unused keystream bytes, wipe the buffer, reset counter, and advance nonce.
+  if self.buf_pos > 32 {
+    self.refill()
+  }
+  for i = 0; i < 8; i = i + 1 {
+    self.key[i] = read_le_u32_fixed(self.buf, self.buf_pos + i * 4)
+  }
+  zeroize_bytes(self.buf)
+  self.buf_pos = 64
+  self.counter = 0U
+  self.increment_nonce()
   Bytes::from_array(out)
+}
+
+///|
+/// Securely wipes all internal DRBG key, nonce, and buffer state.
+pub fn Drbg::zeroize(self : Drbg) -> Unit {
+  zeroize_u32(self.key)
+  zeroize_u32(self.nonce)
+  zeroize_bytes(self.buf)
+  self.counter = 0U
+  self.buf_pos = 64
 }
 
 ///|
