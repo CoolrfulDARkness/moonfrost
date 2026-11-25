@@ -281,18 +281,21 @@ pub fn[S, E] sign(
       FrostError::InvalidParameters("commitment_list exceeds max_signers"),
     )
   }
-  // Ensure this signer's identifier and exact Round 1 commitments appear in commitment_list.
+  // Ensure every participant ID in commitment_list is within [1, max_signers]
+  // and that this signer's identifier and exact Round 1 commitments appear.
   let own_comms = nonces.commitments()
   let mut matched = false
   for i = 0; i < commitment_list.length(); i = i + 1 {
     let entry = commitment_list[i]
+    if entry.identifier > key_package.max_signers {
+      return Err(FrostError::InvalidParticipantId(entry.identifier))
+    }
     if entry.identifier == key_package.identifier {
       if !(ops.element_eq)(entry.commitments.hiding, own_comms.hiding) ||
         !(ops.element_eq)(entry.commitments.binding, own_comms.binding) {
         return Err(FrostError::CommitmentMismatch(key_package.identifier))
       }
       matched = true
-      break
     }
   }
   if !matched {
@@ -484,6 +487,24 @@ pub fn[S, E] aggregate(
     Ok(_) => ()
     Err(e) => return Err(e)
   }
+  if (ops.element_is_identity)(pub_keys.verifying_key) {
+    return Err(FrostError::IdentityElement)
+  }
+  for i = 0; i < pub_keys.verifying_shares.length(); i = i + 1 {
+    let (pid, pk_i) = pub_keys.verifying_shares[i]
+    if pid <= 0 || pid > pub_keys.max_signers {
+      return Err(FrostError::InvalidParticipantId(pid))
+    }
+    if (ops.element_is_identity)(pk_i) {
+      return Err(FrostError::IdentityElement)
+    }
+    for j = i + 1; j < pub_keys.verifying_shares.length(); j = j + 1 {
+      let (pid2, _) = pub_keys.verifying_shares[j]
+      if pid2 == pid {
+        return Err(FrostError::DuplicateParticipant(pid))
+      }
+    }
+  }
   match validate_commitment_list(ops, commitment_list, pub_keys.min_signers) {
     Ok(_) => ()
     Err(e) => return Err(e)
@@ -493,6 +514,13 @@ pub fn[S, E] aggregate(
     return Err(
       FrostError::InvalidParameters("commitment_list exceeds max_signers"),
     )
+  }
+  for i = 0; i < num; i = i + 1 {
+    if commitment_list[i].identifier > pub_keys.max_signers {
+      return Err(
+        FrostError::InvalidParticipantId(commitment_list[i].identifier),
+      )
+    }
   }
   if sig_shares.length() < num {
     return Err(FrostError::InsufficientParticipants(sig_shares.length(), num))
@@ -555,7 +583,14 @@ pub fn[S, E] aggregate(
   if valid {
     return Ok(sig)
   }
-  // RFC 9591 §5.4 Identifiable Abort: pinpoint every misbehaving participant.
+  // RFC 9591 §5.4 Identifiable Abort (O(n) precomputed challenge & binding factors):
+  // pinpoint every misbehaving participant without swallowing validation errors.
+  let challenge = match
+    compute_challenge(ops, group_commitment, pub_keys.verifying_key, msg) {
+    Ok(v) => v
+    Err(e) => return Err(e)
+  }
+  let participant_list = participants_from_commitment_list(commitment_list)
   let cheaters : Array[Int32] = []
   for i = 0; i < num; i = i + 1 {
     let entry = commitment_list[i]
@@ -574,21 +609,26 @@ pub fn[S, E] aggregate(
       Some(s) => s
       None => return Err(FrostError::InvalidParticipantId(entry.identifier))
     }
-    let ok = match
-      verify_signature_share(
-        ops,
-        entry.identifier,
-        pk_i,
-        entry.commitments,
-        share_i,
-        commitment_list,
-        pub_keys.verifying_key,
-        msg,
-      ) {
+    let binding_factor = match
+      binding_factor_for(binding_factor_list, entry.identifier) {
       Ok(v) => v
-      Err(_) => false
+      Err(e) => return Err(e)
     }
-    if !ok {
+    let lambda_i = match
+      derive_interpolating_value(ops, participant_list, entry.identifier) {
+      Ok(v) => v
+      Err(e) => return Err(e)
+    }
+    let comm_share = (ops.element_add)(
+      entry.commitments.hiding,
+      (ops.scalar_mul_elem)(entry.commitments.binding, binding_factor),
+    )
+    let lhs = (ops.scalar_base_mul)(share_i)
+    let rhs = (ops.element_add)(
+      comm_share,
+      (ops.scalar_mul_elem)(pk_i, (ops.scalar_mul)(challenge, lambda_i)),
+    )
+    if !(ops.element_eq)(lhs, rhs) {
       cheaters.push(entry.identifier)
     }
   }

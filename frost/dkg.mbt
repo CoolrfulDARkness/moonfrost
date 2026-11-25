@@ -1,15 +1,18 @@
 ///|
 /// Decentralized Pedersen Distributed Key Generation (Komlo-Goldberg FROST Fig. 1)
-/// with domain-separated Schnorr Proof of Knowledge (H_dkg) and identifiable
-/// cheater detection in both Round 1 (PoK) and Round 2 (Feldman VSS shares).
+/// with domain-separated Schnorr Proof of Knowledge (H_dkg), Round 1 transcript
+/// binding across rounds, immediate polynomial zeroization, and identifiable
+/// cheater detection in both Round 1 (PoK / commitment) and Round 2 (Feldman VSS).
 
 ///|
 /// Private Round 1 DKG state held locally by a participant.
+/// The secret polynomial `coeffs` is zeroized immediately upon successful `dkg_part2`.
 pub struct DkgRound1Secret[S] {
   priv identifier : Int32
   priv max_signers : Int32
   priv min_signers : Int32
   priv coeffs : Array[S]
+  priv mut used : Bool
 }
 
 ///|
@@ -25,12 +28,16 @@ pub(all) struct DkgRound1Package[S, E] {
 
 ///|
 /// Private Round 2 DKG state held locally by a participant.
+/// Stores only `self_share = f_i(i)` (never the full polynomial) plus an
+/// immutable snapshot of the Round 1 packages verified in `dkg_part2` to
+/// prevent Split-View / Rogue-Key substitution in `dkg_part3`.
 pub struct DkgRound2Secret[S, E] {
   priv identifier : Int32
   priv max_signers : Int32
   priv min_signers : Int32
-  priv coeffs : Array[S]
-  priv commitment : VssCommitment[E]
+  priv mut self_share : S
+  priv verified_r1 : Array[DkgRound1Package[S, E]]
+  priv mut used : Bool
 }
 
 ///|
@@ -83,10 +90,30 @@ fn[S, E] commitments_equal(
 }
 
 ///|
-fn[S, E] validate_dkg_round1_packages(
+fn[S, E] clone_round1_packages(
+  packages : Array[DkgRound1Package[S, E]],
+) -> Array[DkgRound1Package[S, E]] {
+  let out : Array[DkgRound1Package[S, E]] = []
+  for i = 0; i < packages.length(); i = i + 1 {
+    let pkg = packages[i]
+    let coeffs_copy : Array[E] = []
+    for k = 0; k < pkg.commitment.coeffs.length(); k = k + 1 {
+      coeffs_copy.push(pkg.commitment.coeffs[k])
+    }
+    out.push({
+      identifier: pkg.identifier,
+      commitment: { coeffs: coeffs_copy, },
+      pok_r: pkg.pok_r,
+      pok_mu: pkg.pok_mu,
+    })
+  }
+  out
+}
+
+///|
+fn[S, E] validate_dkg_round1_structure(
   ops : SuiteOps[S, E],
   max_signers : Int32,
-  min_signers : Int32,
   own_id : Int32,
   own_commitment : VssCommitment[E],
   round1_packages : Array[DkgRound1Package[S, E]],
@@ -110,16 +137,6 @@ fn[S, E] validate_dkg_round1_packages(
         return Err(FrostError::DuplicateParticipant(pkg.identifier))
       }
     }
-    if pkg.commitment.coeffs.length() != min_signers {
-      return Err(
-        FrostError::InvalidVssCommitment(
-          "DKG round1 commitment length does not match min_signers",
-        ),
-      )
-    }
-    if (ops.element_is_identity)(pkg.commitment.coeffs[0]) {
-      return Err(FrostError::IdentityElement)
-    }
     if pkg.identifier == own_id {
       if !commitments_equal(ops, pkg.commitment, own_commitment) {
         return Err(FrostError::CommitmentMismatch(own_id))
@@ -130,9 +147,58 @@ fn[S, E] validate_dkg_round1_packages(
 }
 
 ///|
-/// Pedersen DKG Round 1: generates a random degree `min_signers - 1` polynomial,
-/// computes its Feldman VSS commitment, and produces a domain-separated Schnorr
-/// Proof of Knowledge of the constant term `a_0`.
+fn[S, E] verify_round1_matches_verified(
+  ops : SuiteOps[S, E],
+  verified : Array[DkgRound1Package[S, E]],
+  provided : Array[DkgRound1Package[S, E]],
+) -> Result[Unit, FrostError] {
+  let n = verified.length()
+  if provided.length() < n {
+    return Err(FrostError::InsufficientParticipants(provided.length(), n))
+  }
+  if provided.length() > n {
+    return Err(
+      FrostError::InvalidParameters("round1_packages count exceeds max_signers"),
+    )
+  }
+  for i = 0; i < provided.length(); i = i + 1 {
+    let p = provided[i]
+    if p.identifier <= 0 || p.identifier > n {
+      return Err(FrostError::InvalidParticipantId(p.identifier))
+    }
+    for j = i + 1; j < provided.length(); j = j + 1 {
+      if provided[j].identifier == p.identifier {
+        return Err(FrostError::DuplicateParticipant(p.identifier))
+      }
+    }
+    let mut matched = false
+    for j = 0; j < n; j = j + 1 {
+      let v = verified[j]
+      if v.identifier == p.identifier {
+        if !commitments_equal(ops, v.commitment, p.commitment) ||
+          !(ops.element_eq)(v.pok_r, p.pok_r) ||
+          !(ops.scalar_eq)(v.pok_mu, p.pok_mu) {
+          return Err(
+            FrostError::InvalidVssCommitment(
+              "round1_packages mismatch between DKG part2 and part3",
+            ),
+          )
+        }
+        matched = true
+        break
+      }
+    }
+    if !matched {
+      return Err(FrostError::InvalidParticipantId(p.identifier))
+    }
+  }
+  Ok(())
+}
+
+///|
+/// Pedersen DKG Round 1: generates a random degree `min_signers - 1` polynomial
+/// with non-zero coefficients, computes its Feldman VSS commitment, and produces
+/// a domain-separated Schnorr Proof of Knowledge of the constant term `a_0`.
 pub fn[S, E] dkg_part1(
   ops : SuiteOps[S, E],
   identifier : Int32,
@@ -150,7 +216,7 @@ pub fn[S, E] dkg_part1(
   let a0 = random_nonzero_scalar(ops, drbg)
   let coeffs : Array[S] = [a0]
   for _i = 1; _i < min_signers; _i = _i + 1 {
-    coeffs.push(random_scalar(ops, drbg))
+    coeffs.push(random_nonzero_scalar(ops, drbg))
   }
   let commitment = vss_commit(ops, coeffs)
   let k = random_nonzero_scalar(ops, drbg)
@@ -166,26 +232,34 @@ pub fn[S, E] dkg_part1(
     max_signers,
     min_signers,
     coeffs,
+    used: false,
   }
   let pkg : DkgRound1Package[S, E] = { identifier, commitment, pok_r, pok_mu, }
   Ok((secret, pkg))
 }
 
 ///|
-/// Pedersen DKG Round 2: validates all `max_signers` Round 1 packages and their
-/// Schnorr PoK proofs (returning `Err(InvalidDkgProof(cheater_ids))` if any fail),
-/// then evaluates and returns secret share packages `f_i(j)` for all `j != i`.
+/// Pedersen DKG Round 2: validates all `max_signers` Round 1 packages, their
+/// Feldman VSS commitments (exact length `min_signers` and all non-identity),
+/// and their Schnorr PoK proofs (returning `Err(InvalidDkgProof(cheater_ids))`
+/// with identifiable attribution if any participant misbehaves), then evaluates
+/// secret shares `f_i(j)` for all `j != i`, zeroizes the secret polynomial, and
+/// binds the verified Round 1 transcript into `DkgRound2Secret`.
 pub fn[S, E] dkg_part2(
   ops : SuiteOps[S, E],
   secret : DkgRound1Secret[S],
   round1_packages : Array[DkgRound1Package[S, E]],
 ) -> Result[(DkgRound2Secret[S, E], Array[DkgRound2Package[S]]), FrostError] {
+  if secret.used {
+    return Err(
+      FrostError::InvalidParameters("DKG Round 1 secret has already been used"),
+    )
+  }
   let own_commitment = vss_commit(ops, secret.coeffs)
   match
-    validate_dkg_round1_packages(
+    validate_dkg_round1_structure(
       ops,
       secret.max_signers,
-      secret.min_signers,
       secret.identifier,
       own_commitment,
       round1_packages,
@@ -196,7 +270,18 @@ pub fn[S, E] dkg_part2(
   let bad_poks : Array[Int32] = []
   for i = 0; i < round1_packages.length(); i = i + 1 {
     let pkg = round1_packages[i]
-    if (ops.element_is_identity)(pkg.pok_r) {
+    if pkg.commitment.coeffs.length() != secret.min_signers {
+      bad_poks.push(pkg.identifier)
+      continue
+    }
+    let mut has_identity = false
+    for k = 0; k < pkg.commitment.coeffs.length(); k = k + 1 {
+      if (ops.element_is_identity)(pkg.commitment.coeffs[k]) {
+        has_identity = true
+        break
+      }
+    }
+    if has_identity || (ops.element_is_identity)(pkg.pok_r) {
       bad_poks.push(pkg.identifier)
       continue
     }
@@ -225,6 +310,8 @@ pub fn[S, E] dkg_part2(
   if bad_poks.length() > 0 {
     return Err(FrostError::InvalidDkgProof(sort_unique_ids(bad_poks)))
   }
+  let own_x = (ops.scalar_from_u32)(secret.identifier.reinterpret_as_uint())
+  let self_share = polynomial_evaluate(ops, own_x, secret.coeffs)
   let out_packages : Array[DkgRound2Package[S]] = []
   for j = 1; j <= secret.max_signers; j = j + 1 {
     if j == secret.identifier {
@@ -238,36 +325,42 @@ pub fn[S, E] dkg_part2(
       secret_share: share,
     })
   }
+  // Immediately zeroize the secret polynomial per Komlo-Goldberg Fig. 1.
+  let zero = (ops.scalar_zero)()
+  for i = 0; i < secret.coeffs.length(); i = i + 1 {
+    secret.coeffs[i] = zero
+  }
+  secret.used = true
   let r2_secret : DkgRound2Secret[S, E] = {
     identifier: secret.identifier,
     max_signers: secret.max_signers,
     min_signers: secret.min_signers,
-    coeffs: secret.coeffs,
-    commitment: own_commitment,
+    self_share,
+    verified_r1: clone_round1_packages(round1_packages),
+    used: false,
   }
   Ok((r2_secret, out_packages))
 }
 
 ///|
-/// Pedersen DKG Round 3: verifies every received Round 2 secret share against
-/// its sender's Feldman VSS commitment (returning `Err(CheaterDetected(ids))` on
-/// any mismatch), then aggregates the participant's final signing share and the
-/// shared group `PublicKeyPackage`.
+/// Pedersen DKG Round 3: verifies `round1_packages` matches the exact Round 1
+/// transcript bound in `DkgRound2Secret`, verifies every received Round 2
+/// secret share against its sender's Feldman VSS commitment (returning
+/// `Err(CheaterDetected(ids))` on any mismatch), then aggregates the
+/// participant's final signing share and shared group `PublicKeyPackage`.
 pub fn[S, E] dkg_part3(
   ops : SuiteOps[S, E],
   secret : DkgRound2Secret[S, E],
   round1_packages : Array[DkgRound1Package[S, E]],
   round2_packages : Array[DkgRound2Package[S]],
 ) -> Result[(KeyPackage[S, E], PublicKeyPackage[E]), FrostError] {
+  if secret.used {
+    return Err(
+      FrostError::InvalidParameters("DKG Round 2 secret has already been used"),
+    )
+  }
   match
-    validate_dkg_round1_packages(
-      ops,
-      secret.max_signers,
-      secret.min_signers,
-      secret.identifier,
-      secret.commitment,
-      round1_packages,
-    ) {
+    verify_round1_matches_verified(ops, secret.verified_r1, round1_packages) {
     Ok(_) => ()
     Err(e) => return Err(e)
   }
@@ -303,14 +396,14 @@ pub fn[S, E] dkg_part3(
       }
     }
   }
-  // Verify every received share f_j(i) against sender j's Round 1 VSS commitment.
+  // Verify every received share f_j(i) against sender j's bound Round 1 VSS commitment.
   let cheaters : Array[Int32] = []
   for i = 0; i < round2_packages.length(); i = i + 1 {
     let pkg = round2_packages[i]
     let mut sender_comm : VssCommitment[E]? = None
-    for j = 0; j < round1_packages.length(); j = j + 1 {
-      if round1_packages[j].identifier == pkg.sender {
-        sender_comm = Some(round1_packages[j].commitment)
+    for j = 0; j < secret.verified_r1.length(); j = j + 1 {
+      if secret.verified_r1[j].identifier == pkg.sender {
+        sender_comm = Some(secret.verified_r1[j].commitment)
         break
       }
     }
@@ -330,8 +423,7 @@ pub fn[S, E] dkg_part3(
     return Err(FrostError::CheaterDetected(sort_unique_ids(cheaters)))
   }
   // Aggregate secret signing share sk_i = f_i(i) + sum_{j != i} f_j(i).
-  let own_x = (ops.scalar_from_u32)(secret.identifier.reinterpret_as_uint())
-  let mut signing_share = polynomial_evaluate(ops, own_x, secret.coeffs)
+  let mut signing_share = secret.self_share
   for i = 0; i < round2_packages.length(); i = i + 1 {
     signing_share = (ops.scalar_add)(
       signing_share,
@@ -342,8 +434,14 @@ pub fn[S, E] dkg_part3(
   let group_coeffs : Array[E] = []
   for k = 0; k < secret.min_signers; k = k + 1 {
     let mut sum_k = (ops.element_identity)()
-    for j = 0; j < round1_packages.length(); j = j + 1 {
-      sum_k = (ops.element_add)(sum_k, round1_packages[j].commitment.coeffs[k])
+    for j = 0; j < secret.verified_r1.length(); j = j + 1 {
+      sum_k = (ops.element_add)(
+        sum_k,
+        secret.verified_r1[j].commitment.coeffs[k],
+      )
+    }
+    if (ops.element_is_identity)(sum_k) {
+      return Err(FrostError::IdentityElement)
     }
     group_coeffs.push(sum_k)
   }
@@ -370,6 +468,8 @@ pub fn[S, E] dkg_part3(
       ),
     )
   }
+  secret.self_share = (ops.scalar_zero)()
+  secret.used = true
   let key_pkg : KeyPackage[S, E] = {
     identifier: secret.identifier,
     signing_share,

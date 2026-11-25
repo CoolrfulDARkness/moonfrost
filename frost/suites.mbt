@@ -91,8 +91,9 @@ pub fn p256_sha256() -> SuiteOps[@p256.Scalar, @p256.P256Point] {
 
 ///|
 /// RFC 9591 Appendix D uniform random scalar generation.
-/// Uses Appendix D.2 wide reduction (64 bytes for ristretto255, 48 bytes for P-256)
-/// with Appendix D.1 constant-time rejection sampling fallback.
+/// Uses Appendix D.2 constant-time wide reduction (64 bytes for ristretto255,
+/// 48 bytes for P-256) as the primary path, with Appendix D.1 rejection
+/// sampling as a fallback for custom suites without wide reduction.
 pub fn[S, E] random_scalar(ops : SuiteOps[S, E], drbg : @crypto.Drbg) -> S {
   if ops.wide_bytes_len > 0 {
     let wide = drbg.next_bytes(ops.wide_bytes_len)

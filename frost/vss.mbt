@@ -50,6 +50,9 @@ pub(all) struct VssCommitment[E] {
 }
 
 ///|
+const MAX_ALLOWED_PARTICIPANTS : Int32 = 65535
+
+///|
 fn validate_threshold(
   min_signers : Int32,
   max_signers : Int32,
@@ -62,11 +65,19 @@ fn validate_threshold(
       FrostError::InvalidThreshold("max_signers must be >= min_signers"),
     )
   }
+  if max_signers > MAX_ALLOWED_PARTICIPANTS {
+    return Err(
+      FrostError::InvalidThreshold(
+        "max_signers exceeds maximum supported participants (65535)",
+      ),
+    )
+  }
   Ok(())
 }
 
 ///|
 /// Evaluates sum_{j=0}^{t-1} (id^j) * C_j using Horner's method on group elements.
+/// Rejects empty commitments or any coefficient equal to the group identity element.
 fn[S, E] eval_vss_commitment(
   ops : SuiteOps[S, E],
   commitment : VssCommitment[E],
@@ -79,6 +90,11 @@ fn[S, E] eval_vss_commitment(
   let len = commitment.coeffs.length()
   if len == 0 {
     return Err(FrostError::InvalidVssCommitment("empty VSS commitment"))
+  }
+  for k = 0; k < len; k = k + 1 {
+    if (ops.element_is_identity)(commitment.coeffs[k]) {
+      return Err(FrostError::IdentityElement)
+    }
   }
   let mut acc = commitment.coeffs[len - 1]
   for j = len - 2; j >= 0; j = j - 1 {
@@ -101,6 +117,13 @@ pub fn[S, E] secret_share_shard(
   match validate_threshold(min_signers, max_signers) {
     Ok(_) => ()
     Err(e) => return Err(e)
+  }
+  if (ops.scalar_is_zero)(coeffs_tail[coeffs_tail.length() - 1]) {
+    return Err(
+      FrostError::InvalidThreshold(
+        "highest-degree polynomial coefficient must be non-zero",
+      ),
+    )
   }
   let coeffs : Array[S] = [secret]
   for i = 0; i < coeffs_tail.length(); i = i + 1 {
@@ -150,7 +173,8 @@ pub fn[S, E] vss_commit(
 
 ///|
 /// Verifies that `share * G == sum_{j=0}^{t-1} (id^j) * commitment.coeffs[j]`
-/// (RFC 9591 Appendix C.2).
+/// (RFC 9591 Appendix C.2). Rejects commitments containing identity elements
+/// or evaluating to the group identity.
 pub fn[S, E] vss_verify(
   ops : SuiteOps[S, E],
   id : Int32,
@@ -160,6 +184,9 @@ pub fn[S, E] vss_verify(
   let rhs = match eval_vss_commitment(ops, commitment, id) {
     Ok(v) => v
     Err(e) => return Err(e)
+  }
+  if (ops.element_is_identity)(rhs) {
+    return Err(FrostError::IdentityElement)
   }
   let lhs = (ops.scalar_base_mul)(share)
   Ok((ops.element_eq)(lhs, rhs))
@@ -185,10 +212,12 @@ pub fn[S, E] derive_group_info(
       ),
     )
   }
-  let verifying_key = commitment.coeffs[0]
-  if (ops.element_is_identity)(verifying_key) {
-    return Err(FrostError::IdentityElement)
+  for k = 0; k < commitment.coeffs.length(); k = k + 1 {
+    if (ops.element_is_identity)(commitment.coeffs[k]) {
+      return Err(FrostError::IdentityElement)
+    }
   }
+  let verifying_key = commitment.coeffs[0]
   let verifying_shares : Array[(Int32, E)] = []
   for id = 1; id <= max_signers; id = id + 1 {
     let pk_i = match eval_vss_commitment(ops, commitment, id) {
@@ -282,7 +311,7 @@ pub fn[S, E] trusted_dealer_keygen(
   let secret = random_nonzero_scalar(ops, drbg)
   let coeffs_tail : Array[S] = []
   for _i = 0; _i < min_signers - 1; _i = _i + 1 {
-    coeffs_tail.push(random_scalar(ops, drbg))
+    coeffs_tail.push(random_nonzero_scalar(ops, drbg))
   }
   trusted_dealer_keygen_with_secret(ops, secret, coeffs_tail, max_signers)
 }
