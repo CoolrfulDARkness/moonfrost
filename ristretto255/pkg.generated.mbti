@@ -1,0 +1,72 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "CoolrfulDARkness/moonfrost/ristretto255"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub const CONTEXT_STRING : String = "FROST-RISTRETTO255-SHA512-v1"
+
+pub const NE : Int32 = 32
+
+pub const NS : Int32 = 32
+
+pub fn h1(Bytes) -> Scalar
+
+pub fn h2(Bytes) -> Scalar
+
+pub fn h3(Bytes) -> Scalar
+
+pub fn h4(Bytes) -> Bytes
+
+pub fn h5(Bytes) -> Bytes
+
+pub fn h_dkg(Bytes) -> Scalar
+
+// Errors
+
+// Types and methods
+#derive(@debug.Debug)
+pub struct RistrettoPoint {
+  // private fields
+}
+pub fn RistrettoPoint::add(Self, Self) -> Self
+pub fn RistrettoPoint::ct_eq(Self, Self) -> Bool
+pub fn RistrettoPoint::decode(Bytes) -> Result[Self, String]
+pub fn RistrettoPoint::deserialize_non_identity(Bytes) -> Result[Self, String]
+pub fn RistrettoPoint::encode(Self) -> Bytes
+pub fn RistrettoPoint::from_uniform_bytes(Bytes) -> Result[Self, String]
+pub fn RistrettoPoint::generator() -> Self
+pub fn RistrettoPoint::identity() -> Self
+pub fn RistrettoPoint::is_identity(Self) -> Bool
+pub fn RistrettoPoint::neg(Self) -> Self
+pub fn RistrettoPoint::scalar_base_mul(Scalar) -> Self
+pub fn RistrettoPoint::scalar_mul(Self, Scalar) -> Self
+pub fn RistrettoPoint::serialize_non_identity(Self) -> Result[Bytes, String]
+pub fn RistrettoPoint::sub(Self, Self) -> Self
+pub impl Eq for RistrettoPoint
+
+#derive(@debug.Debug)
+pub struct Scalar {
+  // private fields
+}
+pub fn Scalar::add(Self, Self) -> Self
+pub fn Scalar::compare(Self, Self) -> Int32
+pub fn Scalar::ct_eq(Self, Self) -> Bool
+pub fn Scalar::from_bytes_mod_order_wide(Bytes) -> Result[Self, String]
+pub fn Scalar::from_bytes_strict(Bytes) -> Result[Self, String]
+pub fn Scalar::from_u32(UInt32) -> Self
+pub fn Scalar::invert(Self) -> Result[Self, String]
+pub fn Scalar::is_zero(Self) -> Bool
+pub fn Scalar::mul(Self, Self) -> Self
+pub fn Scalar::neg(Self) -> Self
+pub fn Scalar::one() -> Self
+pub fn Scalar::sub(Self, Self) -> Self
+pub fn Scalar::to_bytes(Self) -> Bytes
+pub fn Scalar::zero() -> Self
+pub impl Eq for Scalar
+
+// Type aliases
+
+// Traits
