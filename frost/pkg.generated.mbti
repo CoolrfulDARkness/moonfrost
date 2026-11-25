@@ -1,0 +1,222 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "CoolrfulDARkness/moonfrost/frost"
+
+import {
+  "CoolrfulDARkness/moonfrost/crypto",
+  "CoolrfulDARkness/moonfrost/p256",
+  "CoolrfulDARkness/moonfrost/ristretto255",
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn[S, E] aggregate(SuiteOps[S, E], Array[CommitmentEntry[E]], Bytes, PublicKeyPackage[E], Array[SignatureShare[S]]) -> Result[Signature[S, E], FrostError]
+
+pub fn[S, E] commit(SuiteOps[S, E], S, @crypto.Drbg) -> Result[(SigningNonces[S, E], SigningCommitments[E]), FrostError]
+
+pub fn[S, E] commit_with_randomness(SuiteOps[S, E], S, Bytes, Bytes) -> Result[(SigningNonces[S, E], SigningCommitments[E]), FrostError]
+
+pub fn[S, E] compute_binding_factor_inputs(SuiteOps[S, E], E, Array[CommitmentEntry[E]], Bytes) -> Result[Array[(Int32, Bytes)], FrostError]
+
+pub fn[S, E] compute_binding_factors(SuiteOps[S, E], E, Array[CommitmentEntry[E]], Bytes) -> Result[Array[(Int32, S)], FrostError]
+
+pub fn[S, E] compute_challenge(SuiteOps[S, E], E, E, Bytes) -> Result[S, FrostError]
+
+pub fn[S, E] compute_group_commitment(SuiteOps[S, E], Array[CommitmentEntry[E]], Array[(Int32, S)]) -> Result[E, FrostError]
+
+pub fn[S, E] derive_group_info(SuiteOps[S, E], Int32, Int32, VssCommitment[E]) -> Result[PublicKeyPackage[E], FrostError]
+
+pub fn[S, E] derive_interpolating_value(SuiteOps[S, E], Array[Int32], Int32) -> Result[S, FrostError]
+
+pub fn[S, E] deserialize_signature(SuiteOps[S, E], Bytes) -> Result[Signature[S, E], FrostError]
+
+pub fn[S, E] dkg_part1(SuiteOps[S, E], Int32, Int32, Int32, @crypto.Drbg) -> Result[(DkgRound1Secret[S], DkgRound1Package[S, E]), FrostError]
+
+pub fn[S, E] dkg_part2(SuiteOps[S, E], DkgRound1Secret[S], Array[DkgRound1Package[S, E]]) -> Result[(DkgRound2Secret[S, E], Array[DkgRound2Package[S]]), FrostError]
+
+pub fn[S, E] dkg_part3(SuiteOps[S, E], DkgRound2Secret[S, E], Array[DkgRound1Package[S, E]], Array[DkgRound2Package[S]]) -> Result[(KeyPackage[S, E], PublicKeyPackage[E]), FrostError]
+
+pub fn[S, E] encode_group_commitment_list(SuiteOps[S, E], Array[CommitmentEntry[E]]) -> Result[Bytes, FrostError]
+
+pub fn[S, E] nonce_generate(SuiteOps[S, E], S, @crypto.Drbg) -> S
+
+pub fn[S, E] nonce_generate_with_randomness(SuiteOps[S, E], S, Bytes) -> Result[S, FrostError]
+
+pub fn p256_sha256() -> SuiteOps[@p256.Scalar, @p256.P256Point]
+
+pub fn[S, E] polynomial_evaluate(SuiteOps[S, E], S, Array[S]) -> S
+
+pub fn[S, E] polynomial_interpolate_constant(SuiteOps[S, E], Array[(Int32, S)]) -> Result[S, FrostError]
+
+pub fn[S, E] prime_order_sign(SuiteOps[S, E], Bytes, S, @crypto.Drbg) -> Result[Signature[S, E], FrostError]
+
+pub fn[S, E] prime_order_verify(SuiteOps[S, E], Bytes, Signature[S, E], E) -> Result[Bool, FrostError]
+
+pub fn[S, E] random_nonzero_scalar(SuiteOps[S, E], @crypto.Drbg) -> S
+
+pub fn[S, E] random_scalar(SuiteOps[S, E], @crypto.Drbg) -> S
+
+pub fn ristretto255_sha512() -> SuiteOps[@ristretto255.Scalar, @ristretto255.RistrettoPoint]
+
+pub fn[S, E] secret_share_combine(SuiteOps[S, E], Array[(Int32, S)], Int32) -> Result[S, FrostError]
+
+pub fn[S, E] secret_share_shard(SuiteOps[S, E], S, Array[S], Int32) -> Result[(Array[(Int32, S)], Array[S]), FrostError]
+
+pub fn[S, E] serialize_signature(SuiteOps[S, E], Signature[S, E]) -> Result[Bytes, FrostError]
+
+pub fn[S, E] sign(SuiteOps[S, E], KeyPackage[S, E], SigningNonces[S, E], Bytes, Array[CommitmentEntry[E]]) -> Result[SignatureShare[S], FrostError]
+
+pub fn[S, E] trusted_dealer_keygen(SuiteOps[S, E], @crypto.Drbg, Int32, Int32) -> Result[(Array[KeyPackage[S, E]], PublicKeyPackage[E], VssCommitment[E]), FrostError]
+
+pub fn[S, E] trusted_dealer_keygen_with_secret(SuiteOps[S, E], S, Array[S], Int32) -> Result[(Array[KeyPackage[S, E]], PublicKeyPackage[E], VssCommitment[E]), FrostError]
+
+pub fn[S, E] validate_commitment_list(SuiteOps[S, E], Array[CommitmentEntry[E]], Int32) -> Result[Unit, FrostError]
+
+pub fn[S, E] verify_signature_share(SuiteOps[S, E], Int32, E, SigningCommitments[E], S, Array[CommitmentEntry[E]], E, Bytes) -> Result[Bool, FrostError]
+
+pub fn[S, E] vss_commit(SuiteOps[S, E], Array[S]) -> VssCommitment[E]
+
+pub fn[S, E] vss_verify(SuiteOps[S, E], Int32, S, VssCommitment[E]) -> Result[Bool, FrostError]
+
+// Errors
+
+// Types and methods
+#derive(@debug.Debug)
+pub(all) struct CommitmentEntry[E] {
+  identifier : Int32
+  commitments : SigningCommitments[E]
+}
+pub fn[E] CommitmentEntry::new(Int32, SigningCommitments[E]) -> Self[E]
+
+#derive(@debug.Debug)
+pub(all) struct DkgRound1Package[S, E] {
+  identifier : Int32
+  commitment : VssCommitment[E]
+  pok_r : E
+  pok_mu : S
+}
+
+pub struct DkgRound1Secret[S] {
+  // private fields
+}
+
+#derive(@debug.Debug)
+pub(all) struct DkgRound2Package[S] {
+  sender : Int32
+  receiver : Int32
+  secret_share : S
+}
+
+pub struct DkgRound2Secret[S, E] {
+  // private fields
+}
+
+#derive(Eq, @debug.Debug)
+pub(all) enum FrostError {
+  InvalidParameters(String)
+  InvalidThreshold(String)
+  InvalidParticipantId(Int32)
+  DuplicateParticipant(Int32)
+  UnsortedCommitments
+  InsufficientParticipants(Int32, Int32)
+  InvalidScalar(String)
+  InvalidElement(String)
+  IdentityElement
+  NonceAlreadyUsed
+  CommitmentMismatch(Int32)
+  InvalidVssCommitment(String)
+  InvalidDkgProof(Array[Int32])
+  CheaterDetected(Array[Int32])
+  InvalidSignature
+  InvalidSignatureLength(Int32, Int32)
+}
+pub impl Show for FrostError
+
+#derive(@debug.Debug)
+pub(all) struct KeyPackage[S, E] {
+  identifier : Int32
+  signing_share : S
+  verifying_share : E
+  verifying_key : E
+  min_signers : Int32
+  max_signers : Int32
+}
+
+#derive(@debug.Debug)
+pub(all) struct PublicKeyPackage[E] {
+  verifying_shares : Array[(Int32, E)]
+  verifying_key : E
+  min_signers : Int32
+  max_signers : Int32
+}
+pub fn[E] PublicKeyPackage::verifying_share_for(Self[E], Int32) -> Result[E, FrostError]
+
+#derive(@debug.Debug)
+pub(all) struct Signature[S, E] {
+  r : E
+  z : S
+}
+
+#derive(@debug.Debug)
+pub(all) struct SignatureShare[S] {
+  identifier : Int32
+  share : S
+}
+
+#derive(@debug.Debug)
+pub(all) struct SigningCommitments[E] {
+  hiding : E
+  binding : E
+}
+
+pub struct SigningNonces[S, E] {
+  // private fields
+}
+pub fn[S, E] SigningNonces::commitments(Self[S, E]) -> SigningCommitments[E]
+pub fn[S, E] SigningNonces::is_used(Self[S, E]) -> Bool
+
+pub(all) struct SuiteOps[S, E] {
+  context_string : String
+  ne : Int32
+  ns : Int32
+  wide_bytes_len : Int32
+  scalar_zero : () -> S
+  scalar_one : () -> S
+  scalar_from_u32 : (UInt32) -> S
+  scalar_add : (S, S) -> S
+  scalar_sub : (S, S) -> S
+  scalar_mul : (S, S) -> S
+  scalar_neg : (S) -> S
+  scalar_invert : (S) -> Result[S, String]
+  scalar_is_zero : (S) -> Bool
+  scalar_eq : (S, S) -> Bool
+  scalar_compare : (S, S) -> Int32
+  serialize_scalar : (S) -> Bytes
+  deserialize_scalar : (Bytes) -> Result[S, String]
+  scalar_from_wide_bytes : (Bytes) -> Result[S, String]
+  element_identity : () -> E
+  element_generator : () -> E
+  element_add : (E, E) -> E
+  element_sub : (E, E) -> E
+  element_neg : (E) -> E
+  element_is_identity : (E) -> Bool
+  element_eq : (E, E) -> Bool
+  scalar_mul_elem : (E, S) -> E
+  scalar_base_mul : (S) -> E
+  serialize_element : (E) -> Result[Bytes, String]
+  deserialize_element : (Bytes) -> Result[E, String]
+  h1 : (Bytes) -> S
+  h2 : (Bytes) -> S
+  h3 : (Bytes) -> S
+  h4 : (Bytes) -> Bytes
+  h5 : (Bytes) -> Bytes
+  h_dkg : (Bytes) -> S
+}
+
+#derive(@debug.Debug)
+pub(all) struct VssCommitment[E] {
+  coeffs : Array[E]
+}
+
+// Type aliases
+
+// Traits

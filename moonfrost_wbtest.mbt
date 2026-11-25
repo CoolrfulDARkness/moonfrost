@@ -1,3 +1,2 @@
-// Whitebox tests run within the package scope.
-// Use them to validate internal helpers or invariants.
-// Keep them focused; public behavior belongs in `_test.mbt`.
+///|
+// Whitebox tests for the root facade package (public behavior is tested in moonfrost_test.mbt).

@@ -1,0 +1,69 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "CoolrfulDARkness/moonfrost/crypto"
+
+// Values
+pub fn ascii_bytes(String) -> Bytes
+
+pub fn bytes_to_hex(Bytes) -> String
+
+pub fn concat_bytes(Array[Bytes]) -> Bytes
+
+pub fn ct_eq_bytes(Bytes, Bytes) -> Bool
+
+pub fn ct_eq_fixed_bytes(FixedArray[Byte], FixedArray[Byte]) -> Bool
+
+pub fn ct_eq_u64(UInt64, UInt64) -> UInt64
+
+pub fn ct_is_zero_u64(UInt64) -> UInt64
+
+pub fn ct_mask_from_bit(UInt64) -> UInt64
+
+pub fn ct_select_byte(UInt32, Byte, Byte) -> Byte
+
+pub fn ct_select_u32(UInt32, UInt32, UInt32) -> UInt32
+
+pub fn ct_select_u64(UInt64, UInt64, UInt64) -> UInt64
+
+pub fn expand_message_xmd_sha256(Bytes, Bytes, Int32) -> Result[Bytes, String]
+
+pub fn hex_to_bytes(String) -> Result[Bytes, String]
+
+pub fn sha256(Bytes) -> Bytes
+
+pub fn sha256_concat(Array[Bytes]) -> Bytes
+
+pub fn sha512(Bytes) -> Bytes
+
+pub fn sha512_concat(Array[Bytes]) -> Bytes
+
+pub fn zeroize_bytes(FixedArray[Byte]) -> Unit
+
+pub fn zeroize_u64(FixedArray[UInt64]) -> Unit
+
+// Errors
+
+// Types and methods
+pub struct Drbg {
+  // private fields
+}
+pub fn Drbg::from_seed(Bytes) -> Self
+pub fn Drbg::next_bytes(Self, Int32) -> Bytes
+pub fn Drbg::reseed(Self, Bytes) -> Unit
+
+pub struct Sha256 {
+  // private fields
+}
+pub fn Sha256::finalize(Self) -> Bytes
+pub fn Sha256::new() -> Self
+pub fn Sha256::update(Self, Bytes) -> Unit
+
+pub struct Sha512 {
+  // private fields
+}
+pub fn Sha512::finalize(Self) -> Bytes
+pub fn Sha512::new() -> Self
+pub fn Sha512::update(Self, Bytes) -> Unit
+
+// Type aliases
+
+// Traits

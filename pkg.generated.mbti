@@ -1,0 +1,77 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "CoolrfulDARkness/moonfrost"
+
+import {
+  "CoolrfulDARkness/moonfrost/crypto",
+  "CoolrfulDARkness/moonfrost/frost",
+  "CoolrfulDARkness/moonfrost/p256",
+  "CoolrfulDARkness/moonfrost/ristretto255",
+}
+
+// Values
+pub fn[S, E] aggregate(@frost.SuiteOps[S, E], Array[@frost.CommitmentEntry[E]], Bytes, @frost.PublicKeyPackage[E], Array[@frost.SignatureShare[S]]) -> Result[@frost.Signature[S, E], @frost.FrostError]
+
+pub fn[S, E] commit(@frost.SuiteOps[S, E], S, @crypto.Drbg) -> Result[(@frost.SigningNonces[S, E], @frost.SigningCommitments[E]), @frost.FrostError]
+
+pub fn[S, E] deserialize_signature(@frost.SuiteOps[S, E], Bytes) -> Result[@frost.Signature[S, E], @frost.FrostError]
+
+pub fn[S, E] dkg_part1(@frost.SuiteOps[S, E], Int32, Int32, Int32, @crypto.Drbg) -> Result[(@frost.DkgRound1Secret[S], @frost.DkgRound1Package[S, E]), @frost.FrostError]
+
+pub fn[S, E] dkg_part2(@frost.SuiteOps[S, E], @frost.DkgRound1Secret[S], Array[@frost.DkgRound1Package[S, E]]) -> Result[(@frost.DkgRound2Secret[S, E], Array[@frost.DkgRound2Package[S]]), @frost.FrostError]
+
+pub fn[S, E] dkg_part3(@frost.SuiteOps[S, E], @frost.DkgRound2Secret[S, E], Array[@frost.DkgRound1Package[S, E]], Array[@frost.DkgRound2Package[S]]) -> Result[(@frost.KeyPackage[S, E], @frost.PublicKeyPackage[E]), @frost.FrostError]
+
+pub fn drbg_from_seed(Bytes) -> @crypto.Drbg
+
+pub fn p256_sha256() -> @frost.SuiteOps[@p256.Scalar, @p256.P256Point]
+
+pub fn[S, E] prime_order_sign(@frost.SuiteOps[S, E], Bytes, S, @crypto.Drbg) -> Result[@frost.Signature[S, E], @frost.FrostError]
+
+pub fn[S, E] prime_order_verify(@frost.SuiteOps[S, E], Bytes, @frost.Signature[S, E], E) -> Result[Bool, @frost.FrostError]
+
+pub fn ristretto255_sha512() -> @frost.SuiteOps[@ristretto255.Scalar, @ristretto255.RistrettoPoint]
+
+pub fn[S, E] serialize_signature(@frost.SuiteOps[S, E], @frost.Signature[S, E]) -> Result[Bytes, @frost.FrostError]
+
+pub fn[S, E] sign(@frost.SuiteOps[S, E], @frost.KeyPackage[S, E], @frost.SigningNonces[S, E], Bytes, Array[@frost.CommitmentEntry[E]]) -> Result[@frost.SignatureShare[S], @frost.FrostError]
+
+pub fn[S, E] trusted_dealer_keygen(@frost.SuiteOps[S, E], @crypto.Drbg, Int32, Int32) -> Result[(Array[@frost.KeyPackage[S, E]], @frost.PublicKeyPackage[E], @frost.VssCommitment[E]), @frost.FrostError]
+
+pub fn[S, E] verify_signature_share(@frost.SuiteOps[S, E], Int32, E, @frost.SigningCommitments[E], S, Array[@frost.CommitmentEntry[E]], E, Bytes) -> Result[Bool, @frost.FrostError]
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+pub using @frost {type CommitmentEntry}
+
+pub using @frost {type DkgRound1Package}
+
+pub using @frost {type DkgRound1Secret}
+
+pub using @frost {type DkgRound2Package}
+
+pub using @frost {type DkgRound2Secret}
+
+pub using @crypto {type Drbg}
+
+pub using @frost {type FrostError}
+
+pub using @frost {type KeyPackage}
+
+pub using @frost {type PublicKeyPackage}
+
+pub using @frost {type Signature}
+
+pub using @frost {type SignatureShare}
+
+pub using @frost {type SigningCommitments}
+
+pub using @frost {type SigningNonces}
+
+pub using @frost {type SuiteOps}
+
+pub using @frost {type VssCommitment}
+
+// Traits
