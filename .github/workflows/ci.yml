@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-gates:
+    name: Format, Zero-FFI & Docs Sync Gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MoonBit toolchain
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Verify MoonBit version
+        run: moon version
+
+      - name: Check formatting (moon fmt --check)
+        run: moon fmt --check
+
+      - name: Zero-FFI static gate (forbid extern declarations)
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys
+
+          root = pathlib.Path(".")
+          skip_dirs = {".git", "_build", ".mooncakes", "target"}
+          pattern = re.compile(r"\bextern\b")
+          violations = []
+
+          for path in sorted(root.rglob("*.mbt")):
+              if any(part in skip_dirs or part.startswith("target-") for part in path.parts):
+                  continue
+              text = path.read_text(encoding="utf-8")
+              for lineno, line in enumerate(text.splitlines(), start=1):
+                  code_only = line.split("//", 1)[0]
+                  if pattern.search(code_only):
+                      violations.append(f"{path}:{lineno}: {line.strip()}")
+
+          if violations:
+              print("ERROR: Zero-FFI gate failed! Found `extern` in MoonBit source:")
+              for v in violations:
+                  print("  " + v)
+              sys.exit(1)
+
+          print("PASS: Zero `extern` FFI declarations found across all .mbt sources.")
+          PY
+
+      - name: Verify README.md and README.mbt.md are in sync
+        run: diff -u README.md README.mbt.md
+
+  test-matrix:
+    name: Check, Test & CLI Smoke (${{ matrix.target }})
+    needs: static-gates
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [wasm, js, native]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (for JS target)
+        if: matrix.target == 'js'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install MoonBit toolchain
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Strict zero-warning check (moon check -d)
+        run: moon check --target ${{ matrix.target }} -d
+
+      - name: Full test suite with zero warnings (moon test -d)
+        run: moon test --target ${{ matrix.target }} -d
+
+      - name: End-to-end CLI smoke run (moon run cmd/main)
+        run: moon run cmd/main --target ${{ matrix.target }}
+
+  bench-verify:
+    name: Benchmark Verification (${{ matrix.target }})
+    needs: test-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [wasm, js, native]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (for JS target)
+        if: matrix.target == 'js'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install MoonBit toolchain
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Run release benchmarks (moon bench --release -d)
+        run: moon bench --target ${{ matrix.target }} --release -d
