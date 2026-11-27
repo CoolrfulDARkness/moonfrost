@@ -1,5 +1,10 @@
 # MoonFROST (`CoolrfulDARkness/moonfrost`)
 
+> [!IMPORTANT]
+> **项目已架构整合至统一现代隐私认证与门限密码协议栈 [`CoolrfulDARkness/moonvoprf`](https://github.com/CoolrfulDARkness/moonvoprf)（`frost/` 子包，commit `7342711`）。**  
+> 本仓库现仅保留作历史归档，不再单独维护或单独参评；合并版本通过 `SuiteOps[S, E]` 直接绑定 `moonvoprf` 共享的恒定时间 `crypto/ristretto255`、`crypto/p256`、`crypto/sha2` 与 `crypto/kdf` 底座，零重复代码维护。  
+> **Consolidated into [`CoolrfulDARkness/moonvoprf`](https://github.com/CoolrfulDARkness/moonvoprf):** This repository is archived for historical reference. All RFC 9591 FROST packages (incl. Pedersen DKG, Feldman VSS, and Identifiable Abort) now live under `moonvoprf/frost`, bound directly to the shared constant-time `ristretto255`/`p256`/`sha2`/`kdf` core.
+
 > **纯 MoonBit、零 FFI、恒定时间防侧信道的 IETF RFC 9591 FROST 两轮门限 Schnorr 签名协议栈**  
 > 同时完整支持 `FROST(ristretto255, SHA-512)` (§6.2) 与 `FROST(P-256, SHA-256)` (§6.4)，内置无中心 3 轮 **Pedersen DKG**、**Feldman VSS** 与 RFC 9591 §5.4 **精准作弊者定责（Identifiable Abort）**，覆盖 `wasm` / `js` / `native` 三端零警告运行。
 
